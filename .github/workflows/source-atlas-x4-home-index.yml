@@ -34,6 +34,7 @@ jobs:
           repository: michaelrolphone-cmyk/RiscRTE-Utilities
           ref: dcbad832cff91f7988a8e43d84725650b9815953
           path: source/utilities
+          fetch-depth: 0
       - uses: actions/checkout@v4
         with:
           repository: michaelrolphone-cmyk/T5S3-Reader
