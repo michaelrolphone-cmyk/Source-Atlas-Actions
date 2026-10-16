@@ -1,0 +1,59 @@
+name: Source Atlas architecture map
+on:
+  push:
+    paths: [.github/workflows/source-atlas-architecture-map.yml]
+  workflow_dispatch:
+    inputs:
+      source_set_version:
+        description: Exact immutable source-set version
+        default: 009abed0-e38f-4473-b14a-fa88f8227622
+      configuration_hash:
+        description: Actual compiler configuration hash
+        default: 29929d7971c51e90ff044183ff9dd1f8c6f439b9604202ce1ce017785ccfa793
+permissions: {}
+concurrency:
+  group: atlas-architecture-projection
+  cancel-in-progress: false
+jobs:
+  prepare-semantic-map:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Prepare and verify exact-build architecture navigation
+        env:
+          ATLAS_URL: https://tasker-source-atlas.hazy-auk-4334.chatgpt.site
+          INDEX_WORKER_TOKEN: ${{ secrets.SOURCE_ATLAS_INDEX_WORKER_TOKEN }}
+          SITES_SERVICE_TOKEN: ${{ secrets.SOURCE_ATLAS_SERVICE_TOKEN }}
+          SET_VERSION: ${{ inputs.source_set_version || '009abed0-e38f-4473-b14a-fa88f8227622' }}
+          CONFIGURATION: ${{ inputs.configuration_hash || '29929d7971c51e90ff044183ff9dd1f8c6f439b9604202ce1ce017785ccfa793' }}
+        run: |
+          python - <<'PY'
+          import os,json,time,urllib.request,urllib.error,datetime
+          base={'source_set':os.environ['SET_VERSION'],'configuration_hash':os.environ['CONFIGURATION'],'limit':12}
+          def prepare(extra):
+              for attempt in range(100):
+                  request=urllib.request.Request(os.environ['ATLAS_URL']+'/api/worker',data=json.dumps({'operation':'prepare_architecture','arguments':dict(base,**extra)}).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['INDEX_WORKER_TOKEN'],'OAI-Sites-Authorization':'Bearer '+os.environ['SITES_SERVICE_TOKEN']})
+                  try:
+                      with urllib.request.urlopen(request,timeout=90) as response:result=json.load(response)
+                  except urllib.error.HTTPError as error:
+                      result=json.loads(error.read())
+                      if not result.get('waiting'):raise RuntimeError('Architecture preparation failed: '+str(result.get('code',error.code)))
+                  if result.get('ready'):return result
+                  deadline=result.get('next_retry_at')
+                  wait=max(.5,datetime.datetime.fromisoformat(deadline.replace('Z','+00:00')).timestamp()-time.time()) if deadline else .2
+                  if wait>120:raise RuntimeError('Retry deadline exceeds this verification window; resume after '+deadline)
+                  print(json.dumps({'progress':result.get('progress'),'waiting':result.get('waiting',False),'retry_at':deadline}),flush=True)
+                  time.sleep(wait+.1)
+              raise RuntimeError('Projection remains incomplete; resume the same exact build')
+          root=prepare({})
+          if not root['nodes']:raise RuntimeError('Compiler graph contains no architecture constructs')
+          contract=next((n for n in root['nodes'] if n.get('callback_contract')),root['nodes'][0])
+          members=prepare({'node_id':contract['id'],'view':'composition'})
+          functions=prepare({'query':'alarm_service_resume'})
+          function=next((n for n in functions['nodes'] if n['kind']=='function'),None)
+          calls=prepare({'node_id':function['id'],'view':'dependencies'}) if function else None
+          summary={'source_set_version':root['source_set_version'],'configuration_hash':root['configuration_hash'],'snapshot_id':root['snapshot_id'],'constructs':root['coverage']['entities'],'relations':root['coverage']['relations'],'truncated':root['coverage']['truncated'],'coverage_complete':root['coverage']['complete'],'contract':contract['label'],'members':members['total'],'contract_source':contract.get('url'),'function':function['label'] if function else None,'function_dependencies':calls['total'] if calls else None}
+          if not members['nodes']:raise RuntimeError('Contract drill-down did not return composition')
+          print(json.dumps(summary,indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as out:out.write('### Exact-build code architecture verified\n```json\n'+json.dumps(summary,indent=2)+'\n```\n')
+          PY
