@@ -61,7 +61,7 @@ jobs:
           export ATLAS_CC_RECORDS="$PWD/compiler-records"
           mkdir -p ccwrap
           chmod +x scripts/source-atlas-capture-cc.py
-          ln -s "$PWD/scripts/source-atlas-capture-cc.py" ccwrap/xtensa-esp32s3-elf-gcc
+          cp scripts/source-atlas-capture-cc.py ccwrap/xtensa-esp32s3-elf-gcc
           for tool in nm objdump readelf; do
             ln -s "$(dirname "$ATLAS_ACTUAL_CC")/xtensa-esp32s3-elf-$tool" "ccwrap/xtensa-esp32s3-elf-$tool"
           done
@@ -82,6 +82,7 @@ jobs:
                   for include in unit['implicit_include_paths']:unit['arguments']+=['-isystem',include]
                   units.append(unit)
           if not units:raise SystemExit('No real target compiler commands captured')
+          units.sort(key=lambda u:(u['file'],json.dumps(u['original_arguments'])))
           pathlib.Path('compile_commands.json').write_text(json.dumps(units,indent=2))
           PY
       - name: Generate and upload build-qualified compiler indexes
