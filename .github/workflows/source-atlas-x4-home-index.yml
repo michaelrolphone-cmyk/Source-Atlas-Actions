@@ -1,3 +1,4 @@
+# Parser diagnostics are separate from the unchanged byte-verified GCC build.
 name: Source Atlas pinned X4 Home compiler index
 on:
   workflow_dispatch:
