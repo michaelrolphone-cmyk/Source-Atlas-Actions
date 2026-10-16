@@ -1,0 +1,116 @@
+name: Source Atlas pinned X4 Home compiler index
+on:
+  workflow_dispatch:
+  push:
+    paths: [.github/workflows/source-atlas-x4-home-index.yml]
+permissions:
+  contents: read
+concurrency:
+  group: atlas-x4-home-009abed0
+  cancel-in-progress: false
+jobs:
+  reproduce-and-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: michaelrolphone-cmyk/RiscRTE-XTEINK-X4-PRO
+          ref: 608f43ec30fd97644b4cb63706251c8e8a0b11f9
+          path: source/product
+      - uses: actions/checkout@v4
+        with:
+          repository: michaelrolphone-cmyk/RiscRTE-System-Apps
+          ref: 09400a550562ca9568ac7ab664ba3222eeedf2c8
+          path: source/system
+      - uses: actions/checkout@v4
+        with:
+          repository: michaelrolphone-cmyk/RiscRTE
+          ref: a91edf3fada6a559ec107186dd163d0c8da10d29
+          path: source/runtime
+      - uses: actions/checkout@v4
+        with:
+          repository: michaelrolphone-cmyk/RiscRTE-Utilities
+          ref: dcbad832cff91f7988a8e43d84725650b9815953
+          path: source/utilities
+      - uses: actions/checkout@v4
+        with:
+          repository: michaelrolphone-cmyk/T5S3-Reader
+          ref: c98e4222048244b1e729869ed47aa99130025fd3
+          path: source/reader
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install exact released GCC and matching Xtensa Clang parser
+        run: |
+          set -euo pipefail
+          pip install platformio==6.1.19 pyelftools==0.32 Pillow==11.3.0
+          pio pkg install --global --tool 'espressif/toolchain-xtensa-esp32s3@8.4.0+2021r2-patch5'
+          mkdir -p ci-clang/clang esp-clang
+          for file in __init__.py cindex.py; do
+            curl --fail --retry 3 -L "https://raw.githubusercontent.com/espressif/llvm-project/esp-22.1.4_20260825/clang/bindings/python/clang/$file" -o "ci-clang/clang/$file"
+          done
+          curl --fail --retry 3 -L https://github.com/espressif/llvm-project/releases/download/esp-22.1.4_20260825/libs-clang-esp-22.1.4_20260825-x86_64-linux-gnu.tar.xz -o /tmp/esp-clang.tar.xz
+          tar -xJf /tmp/esp-clang.tar.xz -C esp-clang
+      - name: Reproduce released Home and record expanded target compiler commands
+        run: |
+          set -euo pipefail
+          export ATLAS_ACTUAL_CC="$HOME/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-gcc"
+          export ATLAS_CC_RECORDS="$PWD/compiler-records"
+          mkdir -p ccwrap
+          chmod +x scripts/source-atlas-capture-cc.py
+          ln -s "$PWD/scripts/source-atlas-capture-cc.py" ccwrap/xtensa-esp32s3-elf-gcc
+          for tool in nm objdump readelf; do
+            ln -s "$(dirname "$ATLAS_ACTUAL_CC")/xtensa-esp32s3-elf-$tool" "ccwrap/xtensa-esp32s3-elf-$tool"
+          done
+          python source/product/minimal/recovery-107/build_clock.py --system source/system --x4 source/product --runtime source/runtime --sdk source/reader/sdk/driver --utilities source/utilities --reader-scripts source/reader/scripts --compiler "$PWD/ccwrap/xtensa-esp32s3-elf-gcc" --output target
+          echo '02b38ed65e1adcb8ecd49c0dc6b58f678ea0110160e38f4f70ed61c5e0b484d7  target/home/default.elf' | sha256sum --check
+          python - <<'PY'
+          import json, pathlib, subprocess, os
+          cc=os.environ['ATLAS_ACTUAL_CC']
+          probe=subprocess.run([cc,'-E','-v','-x','c','-'],input='',text=True,capture_output=True,check=True)
+          paths=probe.stderr.split('#include <...> search starts here:')[1].split('End of search list.')[0].strip().splitlines()
+          units=[]
+          for path in sorted(pathlib.Path('compiler-records').glob('*.json')):
+              for unit in json.loads(path.read_text()):
+                  unit['implicit_include_paths']=[p.strip() for p in paths]
+                  unit['compiler_version']=subprocess.check_output([cc,'--version'],text=True).splitlines()[0]
+                  unit['compiler_target']=subprocess.check_output([cc,'-dumpmachine'],text=True).strip()
+                  unit['original_arguments']=unit['arguments'][:]
+                  for include in unit['implicit_include_paths']:unit['arguments']+=['-isystem',include]
+                  units.append(unit)
+          if not units:raise SystemExit('No real target compiler commands captured')
+          pathlib.Path('compile_commands.json').write_text(json.dumps(units,indent=2))
+          PY
+      - name: Generate and upload build-qualified compiler indexes
+        env:
+          ATLAS_URL: https://tasker-source-atlas.hazy-auk-4334.chatgpt.site
+          INDEX_WORKER_TOKEN: ${{ secrets.SOURCE_ATLAS_INDEX_WORKER_TOKEN }}
+          SITES_SERVICE_TOKEN: ${{ secrets.SOURCE_ATLAS_SERVICE_TOKEN }}
+          PYTHONPATH: ${{ github.workspace }}/ci-clang
+        run: |
+          set -euo pipefail
+          library=$(find "$PWD/esp-clang" -name 'libclang.so*' -type f | head -1)
+          test -n "$library"
+          export LD_LIBRARY_PATH="$(dirname "$library"):${LD_LIBRARY_PATH:-}"
+          target=$("$HOME/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-gcc" -dumpmachine)
+          failed=0
+          for item in 'product:RiscRTE-XTEINK-X4-PRO' 'system:RiscRTE-System-Apps' 'runtime:RiscRTE' 'utilities:RiscRTE-Utilities' 'reader:T5S3-Reader'; do
+            folder=${item%%:*}
+            repo=${item#*:}
+            python scripts/source-atlas-ci-symbols.py --engine clang --root "source/$folder" --repository "michaelrolphone-cmyk/$repo" --compile-commands compile_commands.json --target "$target" --libclang "$library" --map-copies --source-set-version 009abed0-e38f-4473-b14a-fa88f8227622 --output "symbols-$folder.json" --upload || failed=1
+          done
+          exit "$failed"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: atlas-x4-home-009abed0-build-and-compiler-evidence
+          path: |
+            compile_commands.json
+            compiler-records/
+            symbols-*.json
+            target/command.json
+            target/home/default.elf
+            target/home/build-evidence.json
+          retention-days: 14
