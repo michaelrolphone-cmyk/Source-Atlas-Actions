@@ -1,9 +1,10 @@
 # Managed by Source Atlas appgprj_6ad1deaef2cc81918e4682c1d89d047b
+# Schedule repair 02d0a658-7d26-4d35-b0f9-9e517ca3a603
 name: Source Atlas index worker
 on:
   workflow_dispatch:
   schedule:
-    - cron: "3-58/5 * * * *"
+    - cron: "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"
 permissions: {}
 concurrency:
   group: source-atlas-index-worker
