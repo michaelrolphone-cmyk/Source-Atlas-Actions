@@ -8,7 +8,7 @@ from functools import lru_cache
 p=argparse.ArgumentParser();p.add_argument('--compile-commands',required=True);p.add_argument('--repository',required=True);p.add_argument('--root',default='.');p.add_argument('--engine',choices=['clang','tree-sitter'],default='clang');p.add_argument('--source-set-version');p.add_argument('--upload',action='store_true');p.add_argument('--output',default='symbols.json');p.add_argument('--libclang');p.add_argument('--target');p.add_argument('--map-copies',action='store_true',help='Map byte-identical generated copies back to unique tracked files; coverage remains partial');a=p.parse_args()
 root=pathlib.Path(a.root).resolve();sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
 if subprocess.check_output(['git','status','--porcelain','--untracked-files=no'],cwd=root,text=True).strip():raise SystemExit('Refusing an index from a dirty checkout')
-raw=pathlib.Path(a.compile_commands).read_bytes();commands=json.loads(raw);config=hashlib.sha256(raw+b'\0'+(a.target or '').encode()).hexdigest()
+raw=pathlib.Path(a.compile_commands).read_bytes();commands=json.loads(raw);config=hashlib.sha256(raw+b'\0'+(a.target or '').encode()+b'\0parser-diagnostics=-Wno-error').hexdigest()
 if not commands:raise SystemExit('The compilation database is empty')
 entries=[];failed=[];indexed=0
 copies={}
@@ -44,6 +44,10 @@ for unit in commands:
                 if candidate==file:i+=1;continue
                 filtered.append(args[i]);i+=1
             filtered+=['-working-directory='+str(directory)]
+            # GCC's warning-as-error policy must not turn Clang-only style/codegen
+            # warnings into missing ASTs. This changes diagnostics, not target,
+            # macros/includes or the byte-verified build. Actual parse errors remain errors.
+            filtered+=['-Wno-error']
             if a.target:filtered+=['--target='+a.target]
             tu=cindex.Index.create().parse(str(file),args=filtered,options=cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD)
             errors=[str(d) for d in tu.diagnostics if d.severity>=cindex.Diagnostic.Error]
@@ -92,7 +96,7 @@ coverage=dict(total_units=len(commands),indexed_units=indexed,failed_units=faile
 if a.map_copies:
     coverage['complete']=False
     coverage['failed_units'].append('Generated copies mapped by unique byte identity; generated-only sources and ambiguous copies are not covered by canonical Git source. No complete-reference claim.')
-base=dict(repository=a.repository,commit=sha,engine=a.engine,configuration_hash=config,build_configuration=pathlib.Path(a.compile_commands).name+(' target='+a.target if a.target else ''),source_set_version=a.source_set_version,coverage=coverage)
+base=dict(repository=a.repository,commit=sha,engine=a.engine,configuration_hash=config,build_configuration=pathlib.Path(a.compile_commands).name+(' target='+a.target if a.target else '')+'; parser diagnostics: -Wno-error',source_set_version=a.source_set_version,coverage=coverage)
 pathlib.Path(a.output).write_text(json.dumps(dict(**base,entries=entries),indent=2))
 if a.upload:
     if not indexed:raise SystemExit('No translation units parsed successfully; refusing an empty compiler index. Inspect failed_units in output.')
