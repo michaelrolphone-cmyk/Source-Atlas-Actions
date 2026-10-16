@@ -3,7 +3,8 @@
 Install: pip install libclang tree-sitter tree-sitter-c tree-sitter-cpp
 Uses the repository checkout and ACTUAL compile_commands.json; never invents flags.
 """
-import argparse, hashlib, json, os, pathlib, shlex, subprocess, urllib.request, uuid
+import argparse, hashlib, json, os, pathlib, shlex, subprocess, urllib.request, urllib.error, uuid, time
+from functools import lru_cache
 p=argparse.ArgumentParser();p.add_argument('--compile-commands',required=True);p.add_argument('--repository',required=True);p.add_argument('--root',default='.');p.add_argument('--engine',choices=['clang','tree-sitter'],default='clang');p.add_argument('--source-set-version');p.add_argument('--upload',action='store_true');p.add_argument('--output',default='symbols.json');p.add_argument('--libclang');p.add_argument('--target');p.add_argument('--map-copies',action='store_true',help='Map byte-identical generated copies back to unique tracked files; coverage remains partial');a=p.parse_args()
 root=pathlib.Path(a.root).resolve();sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
 if subprocess.check_output(['git','status','--porcelain','--untracked-files=no'],cwd=root,text=True).strip():raise SystemExit('Refusing an index from a dirty checkout')
@@ -15,6 +16,7 @@ if a.map_copies:
     for name in subprocess.check_output(['git','ls-files','-z'],cwd=root).decode().split('\0'):
         path=root/name
         if name and path.is_file():copies.setdefault(hashlib.sha256(path.read_bytes()).hexdigest(),[]).append(name)
+@lru_cache(maxsize=10000)
 def source_path(path):
     path=pathlib.Path(path).resolve()
     try:return str(path.relative_to(root))
@@ -94,9 +96,21 @@ base=dict(repository=a.repository,commit=sha,engine=a.engine,configuration_hash=
 pathlib.Path(a.output).write_text(json.dumps(dict(**base,entries=entries),indent=2))
 if a.upload:
     if not indexed:raise SystemExit('No translation units parsed successfully; refusing an empty compiler index. Inspect failed_units in output.')
-    index_id=str(uuid.uuid4());batches=[entries[i:i+1000] for i in range(0,len(entries),1000)] or [[]]
+    index_id=str(uuid.uuid5(uuid.NAMESPACE_URL,a.repository+'@'+sha+':'+config+':'+str(a.source_set_version)));batches=[entries[i:i+1000] for i in range(0,len(entries),1000)] or [[]]
     for i,batch in enumerate(batches):
         payload=dict(operation='submit_symbol_index',arguments=dict(**base,index_id=index_id,batch_id=str(i),final=i==len(batches)-1,entries=batch))
         req=urllib.request.Request(os.environ['ATLAS_URL'].rstrip('/')+'/api/worker',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['INDEX_WORKER_TOKEN'],'OAI-Sites-Authorization':'Bearer '+os.environ['SITES_SERVICE_TOKEN']})
-        with urllib.request.urlopen(req,timeout=90) as r:print(r.read().decode())
+        for attempt in range(8):
+            try:
+                with urllib.request.urlopen(req,timeout=90) as r:print(r.read().decode())
+                break
+            except urllib.error.HTTPError as e:
+                try:details=json.loads(e.read())
+                except (ValueError,UnicodeError):details={}
+                if attempt==7 or not (details.get('waiting') or e.code>=500):raise
+                from datetime import datetime
+                deadline=details.get('next_retry_at')
+                delay=max(1,datetime.fromisoformat(deadline.replace('Z','+00:00')).timestamp()-time.time()) if deadline else min(30,2**attempt)
+                if delay>120:raise RuntimeError('Upload waiting exceeds CI retry window; re-run with the same stable index ID after '+str(deadline))
+                time.sleep(delay+0.25)
 print(json.dumps(dict(commit=sha,configuration_hash=config,entries=len(entries),coverage=coverage)))
