@@ -32,10 +32,16 @@ jobs:
         run: |
           node --input-type=module <<'ATLAS_RUNNER'
           // Xylem managed runner. Secrets are injected by GitHub Actions, never source.
-          export async function runActions(env=process.env,{budget=45*60000,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}){
+          export async function runActions(env=process.env,{budget=45*60000,handoffBudget=4*60000,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}){
            const call=async body=>{const r=await fetch(env.ATLAS_URL+'/api/worker',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.INDEX_WORKER_TOKEN,'OAI-Sites-Authorization':'Bearer '+env.SITES_SERVICE_TOKEN},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)});const data=await r.json().catch(()=>({error:'Non-JSON response'}));if(!r.ok)throw Error('Xylem callback '+r.status+': '+JSON.stringify(data));return data;};
            const trigger=env.ATLAS_TRIGGER==='schedule'?'scheduled':env.ATLAS_CONTINUATION?'continuation':'requested',run_id=env.GITHUB_RUN_ID||null,run_url=run_id?'https://github.com/'+env.GITHUB_REPOSITORY+'/actions/runs/'+run_id:null;
            const heartbeat=(phase,extra={})=>call({operation:'heartbeat',trigger,phase,provider:'github_actions',run_id,run_url,...extra});
+           const continueWork=async()=>{const deadline=Date.now()+handoffBudget;for(;;){const result=await call({operation:'continue',run_id,next_retry_at});if(result.accepted||result.idle||!result.waiting&&!result.busy)return result;
+            const retryAt=result.next_retry_at?Date.parse(result.next_retry_at):Date.now()+(result.retry_after_seconds||2)*1000;
+            if(retryAt>=deadline)return {...result,recovery_action:'watchdog_retry_after_deadline'};
+            do{await heartbeat('waiting',{cycles,next_retry_at:new Date(retryAt).toISOString(),continuation:result});await sleep(Math.min(30000,Math.max(1,retryAt-Date.now())));}while(Date.now()<retryAt);
+            if(Date.now()>=deadline)return {...result,recovery_action:'watchdog_retry_after_deadline'};
+           }};
            const start=Date.now();let cycles=0,next_retry_at=env.ATLAS_NOT_BEFORE||null,unfinished=true;await heartbeat('started');
            try{let refreshed=false;do{
            if(next_retry_at){const wait=Math.max(0,Date.parse(next_retry_at)-Date.now());if(wait>0){if(Date.now()-start+Math.min(wait,30000)>=budget)break;await sleep(Math.min(wait,30000));await heartbeat('waiting',{cycles,next_retry_at});continue;}next_retry_at=null;}
@@ -46,9 +52,9 @@ jobs:
            }while(Date.now()-start<budget);
            // The successor is queued before this run ends. GitHub concurrency prevents
            // overlap; Site leases/checkpoints protect against duplicate delivery.
-           const continuation=unfinished?await call({operation:'continue',run_id,next_retry_at}):null;
+           const continuation=unfinished?await continueWork():null;
            await heartbeat('finished',{cycles,continuation});return {cycles,continuation};}
-           catch(e){await heartbeat('failed',{cycles,error:String(e)}).catch(()=>{});await call({operation:'continue',run_id,next_retry_at:new Date(Date.now()+30000).toISOString()}).catch(()=>{});throw e;}
+           catch(e){await heartbeat('failed',{cycles,error:String(e)}).catch(()=>{});next_retry_at=new Date(Date.now()+30000).toISOString();await continueWork().catch(()=>{});throw e;}
           }
           
           await runActions();
