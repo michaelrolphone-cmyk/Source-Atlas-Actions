@@ -1,10 +1,10 @@
 # Managed by Source Atlas appgprj_6ad1deaef2cc81918e4682c1d89d047b
-# Schedule repair 747ee596-393f-4049-8097-c78ae0de77c0
-name: Source Atlas index worker
+# Schedule repair bba37096-fd71-474c-b4f9-1ef2d90c4412
+name: Xylem index worker
 on:
   workflow_dispatch:
   schedule:
-    - cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
 permissions: {}
 concurrency:
   group: source-atlas-index-worker
@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
-      - name: Drain Source Atlas jobs
+      - name: Drain Xylem jobs
         env:
           ATLAS_URL: https://tasker-source-atlas.hazy-auk-4334.chatgpt.site
           INDEX_WORKER_TOKEN: ${{ secrets.SOURCE_ATLAS_INDEX_WORKER_TOKEN }}
@@ -22,9 +22,9 @@ jobs:
           ATLAS_TRIGGER: ${{ github.event_name }}
         run: |
           node --input-type=module <<'ATLAS_RUNNER'
-          // Source Atlas managed runner. Secrets are injected by GitHub Actions, never source.
+          // Xylem managed runner. Secrets are injected by GitHub Actions, never source.
           export async function runActions(env=process.env,{budget=45*60000}={}){
-           const call=async body=>{const r=await fetch(env.ATLAS_URL+'/api/worker',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.INDEX_WORKER_TOKEN,'OAI-Sites-Authorization':'Bearer '+env.SITES_SERVICE_TOKEN},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)});const data=await r.json().catch(()=>({error:'Non-JSON response'}));if(!r.ok)throw Error('Source Atlas callback '+r.status+': '+JSON.stringify(data));return data;};
+           const call=async body=>{const r=await fetch(env.ATLAS_URL+'/api/worker',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.INDEX_WORKER_TOKEN,'OAI-Sites-Authorization':'Bearer '+env.SITES_SERVICE_TOKEN},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)});const data=await r.json().catch(()=>({error:'Non-JSON response'}));if(!r.ok)throw Error('Xylem callback '+r.status+': '+JSON.stringify(data));return data;};
            const trigger=env.ATLAS_TRIGGER==='schedule'?'scheduled':'requested',run_id=env.GITHUB_RUN_ID||null,run_url=run_id?'https://github.com/'+env.GITHUB_REPOSITORY+'/actions/runs/'+run_id:null;
            const heartbeat=(phase,extra={})=>call({operation:'heartbeat',trigger,phase,provider:'github_actions',run_id,run_url,...extra});
            const start=Date.now();let cycles=0;await heartbeat('started');
