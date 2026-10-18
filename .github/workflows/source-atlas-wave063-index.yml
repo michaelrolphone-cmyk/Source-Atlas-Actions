@@ -1,0 +1,87 @@
+name: Source Atlas released Wave .63 Runtime compiler index
+run-name: atlas-index-${{ inputs.atlas_request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      atlas_request_id:
+        required: true
+        type: string
+      source_set_version:
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: atlas-wave063-runtime
+  cancel-in-progress: false
+jobs:
+  index:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    container: espressif/idf:v6.1@sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONNOUSERSITE: '1'
+      CCACHE_DISABLE: '1'
+      IDF_CCACHE_ENABLE: '0'
+      SOURCE_SET_VERSION: ${{ inputs.source_set_version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Qualify verifier and restore exact source checkouts
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_wave063_inputs.py -v
+          test "$SOURCE_SET_VERSION" = 56cd4156-61e1-406e-81f5-f188cb3969df
+          root=/__w/_temp/wave-serial-logging-native
+          test ! -e "$root"
+          mkdir -p "$root/sources"
+          for item in 'runtime:RiscRTE:0aab2fd3b03b4190d638e23c79a465afeecf5dfb' 'product:RiscRTE-Wavshare-S3-Touch-AMOLED-2.06:f42a6e07133c599a22acfaa8b8a0672ff996dc1b'; do
+            IFS=: read -r folder repo revision <<< "$item"
+            git init --quiet "$root/sources/$folder"
+            git -C "$root/sources/$folder" remote add origin "https://github.com/michaelrolphone-cmyk/$repo.git"
+            git -C "$root/sources/$folder" fetch --no-tags --depth=1 origin "$revision"
+            git -C "$root/sources/$folder" checkout --quiet --detach FETCH_HEAD
+          done
+      - name: Verify released inputs and regenerate only matching configuration headers
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          curl --fail --retry 3 -L 'https://github.com/michaelrolphone-cmyk/RiscRTE-Wavshare-S3-Touch-AMOLED-2.06/releases/download/test-sd-apps-0.1.63/Waveshare-0.1.63-SD-Apps-Evidence.zip' -o evidence/release.zip
+          python3 scripts/source-atlas-wave063-inputs.py --archive evidence/release.zip --source-set-version "$SOURCE_SET_VERSION" --output evidence
+      - name: Install the pinned Espressif Clang parser
+        run: |
+          set -euo pipefail
+          mkdir -p ci-clang/clang esp-clang
+          for file in __init__.py cindex.py; do
+            curl --fail --retry 3 -L "https://raw.githubusercontent.com/espressif/llvm-project/esp-22.1.4_20260825/clang/bindings/python/clang/$file" -o "ci-clang/clang/$file"
+          done
+          curl --fail --retry 3 -L https://github.com/espressif/llvm-project/releases/download/esp-22.1.4_20260825/libs-clang-esp-22.1.4_20260825-x86_64-linux-gnu.tar.xz -o evidence/esp-clang.tar.xz
+          sha256sum evidence/esp-clang.tar.xz ci-clang/clang/*.py > evidence/parser-sha256.txt
+          tar -xJf evidence/esp-clang.tar.xz -C esp-clang
+      - name: Parse and upload only actual Runtime translation units
+        env:
+          ATLAS_URL: https://tasker-source-atlas.hazy-auk-4334.chatgpt.site
+          INDEX_WORKER_TOKEN: ${{ secrets.SOURCE_ATLAS_INDEX_WORKER_TOKEN }}
+          SITES_SERVICE_TOKEN: ${{ secrets.SOURCE_ATLAS_SERVICE_TOKEN }}
+          PYTHONPATH: ${{ github.workspace }}/ci-clang
+        run: |
+          set -euo pipefail
+          library=$(find "$PWD/esp-clang" -name 'libclang.so*' -type f | head -1)
+          test -n "$library"
+          export LD_LIBRARY_PATH="$(dirname "$library"):${LD_LIBRARY_PATH:-}"
+          python3 scripts/source-atlas-ci-symbols.py --engine clang --root /__w/_temp/wave-serial-logging-native/sources/runtime --repository michaelrolphone-cmyk/RiscRTE --compile-commands evidence/compile_commands.json --target xtensa-esp32s3-elf --libclang "$library" --source-set-version "$SOURCE_SET_VERSION" --output evidence/symbols-runtime.json --upload
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: atlas-wave063-${{ inputs.atlas_request_id }}
+          path: |
+            evidence/*.json
+            evidence/*.txt
+            /__w/_temp/wave-serial-logging-native/build/log/
+          retention-days: 30
+          if-no-files-found: warn
