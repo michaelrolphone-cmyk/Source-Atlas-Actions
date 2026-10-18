@@ -1,0 +1,16 @@
+{
+  "tests": 17,
+  "result": "passed",
+  "baseline_exit": 1,
+  "baseline_errors": 10,
+  "pinned_sdk": "fff9895c82d744c7237be8847347bdd1b07c6643",
+  "export_sha256": "025b60ba6b80761e3a7049a4095a363f17f33f8902cc2695ad810cc73800caaa",
+  "files": {
+    ".github/workflows/source-atlas-wave063-index.yml": "b1757f3246cc95d1c2c6c73da009b59ffbb30b40e42fe7dd2dd12f6bfe731c18",
+    "scripts/source-atlas-wave063-inputs.py": "d77ef62a447c6c9ba1739f5fac137a645e9df7f1afe193c04b96ffc9ece46f48",
+    "tests/test_wave063_inputs.py": "d8fb139fb5bee9bc32f8b5252bbadd8370d8052854690450b236ce8c7cb5347b",
+    "evidence/environment-baseline.log": "c24a4e050df0afb0b51006e29a8a9ff40f6db94357fdb944f3592080c9c84320",
+    "evidence/environment-fixed.log": "ad586b41b0a4bbfaac9912fe31804de2952a2739601503ccf1035a524f38d8b1"
+  },
+  "scope": "Local deterministic environment validation; actual pinned container remains CI qualification."
+}
