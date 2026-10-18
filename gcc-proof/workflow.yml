@@ -1,0 +1,77 @@
+name: Source Atlas Wave .63 GCC-native two-unit proof
+run-name: atlas-index-${{ inputs.atlas_request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      atlas_request_id:
+        required: true
+        type: string
+      source_set_version:
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: atlas-wave063-runtime
+  cancel-in-progress: false
+jobs:
+  index:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    container: espressif/idf:v6.1@sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONNOUSERSITE: '1'
+      CCACHE_DISABLE: '1'
+      IDF_CCACHE_ENABLE: '0'
+      SOURCE_SET_VERSION: ${{ inputs.source_set_version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Qualify verifier and restore exact source checkouts
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_wave063_inputs.py -v
+          test "$SOURCE_SET_VERSION" = 56cd4156-61e1-406e-81f5-f188cb3969df
+          root=/__w/_temp/wave-serial-logging-native
+          test ! -e "$root"
+          mkdir -p "$root/sources"
+          for item in 'runtime:RiscRTE:0aab2fd3b03b4190d638e23c79a465afeecf5dfb' 'product:RiscRTE-Wavshare-S3-Touch-AMOLED-2.06:f42a6e07133c599a22acfaa8b8a0672ff996dc1b'; do
+            IFS=: read -r folder repo revision <<< "$item"
+            git init --quiet "$root/sources/$folder"
+            git -C "$root/sources/$folder" remote add origin "https://github.com/michaelrolphone-cmyk/$repo.git"
+            git -C "$root/sources/$folder" fetch --no-tags --depth=1 origin "$revision"
+            git -C "$root/sources/$folder" checkout --quiet --detach FETCH_HEAD
+          done
+      - name: Verify released inputs and regenerate only matching configuration headers
+        run: |
+          set -euo pipefail
+          test "$(git -C /opt/esp/idf rev-parse HEAD)" = fff9895c82d744c7237be8847347bdd1b07c6643
+          test -z "$(git -C /opt/esp/idf status --porcelain --untracked-files=no)"
+          echo '025b60ba6b80761e3a7049a4095a363f17f33f8902cc2695ad810cc73800caaa  /opt/esp/idf/export.sh' | sha256sum --check
+          . /opt/esp/idf/export.sh
+          python3 -c "import runpy; runpy.run_path('scripts/source-atlas-wave063-inputs.py')['verify_environment']()"
+          mkdir -p evidence
+          curl --fail --retry 3 -L 'https://github.com/michaelrolphone-cmyk/RiscRTE-Wavshare-S3-Touch-AMOLED-2.06/releases/download/test-sd-apps-0.1.63/Waveshare-0.1.63-SD-Apps-Evidence.zip' -o evidence/release.zip
+          python3 scripts/source-atlas-wave063-inputs.py --archive evidence/release.zip --source-set-version "$SOURCE_SET_VERSION" --output evidence
+      - name: Qualify GCC-native proof on controls and two exact released units
+        run: |
+          set -euo pipefail
+          echo '025b60ba6b80761e3a7049a4095a363f17f33f8902cc2695ad810cc73800caaa  /opt/esp/idf/export.sh' | sha256sum --check
+          . /opt/esp/idf/export.sh
+          python3 gcc-proof/run-proof.py --toolchain /opt/esp/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf --output evidence/gcc-proof --released
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: atlas-wave063-gcc-proof-${{ inputs.atlas_request_id }}
+          path: |
+            evidence/*.json
+            evidence/*.txt
+            evidence/gcc-proof/
+            /__w/_temp/wave-serial-logging-native/build/log/
+          retention-days: 30
+          if-no-files-found: warn

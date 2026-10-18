@@ -1,0 +1,13 @@
+# Bounded GCC-native indexing proof
+
+This isolated proof observes one exact released Runtime C unit, then one C++ unit. It does not upload an index or qualify all 68 Runtime units. It never uses the Clang-adapted compile database.
+
+The runner verifies the original release archive and original 930-entry compiler database, exact Runtime/Product/SDK pins and source/toolchain hashes. It selects only `esp_privileged_os_cpu.c` and `serial/Files.cpp`, preserves their original cwd and arguments, redirects only `-o` to evidence, then appends observation-plugin options. No target macros, GCC flags, headers or target sources are changed. Each unit compiles uninstrumented, instrumented, and instrumented again, sequentially. Baseline/instrumented object hashes must match. Source hashes and clean pinned checkouts are checked again.
+
+The common GCC plugin uses FINISH_DECL, FINISH_TYPE, PRE_GENERICIZE and FINISH. It serializes metadata at the callback rather than retaining unrooted trees. The plugin version must exactly match its headers. Source locations, spelling locations, expression ranges and macro status are retained. Direct calls require GCC's resolved FUNCTION_DECL. Indirect calls remain unresolved. DECL_UID is artifact/process-local only. Type renderings and qualified contexts are diagnostic callback-local text, not persistent identities.
+
+Controls test C direct/indirect calls and C++ overload/member resolution, callsite versus declaration locations, unchanged object bytes and repeatable normalized records. Exact-source gates inspect 18 C handwritten definitions, selected callsites and negative weak/address cases, Files method qualification, distinct same-line calls and unresolved callbacks. Compiler success and bounded fidelity gates are separate from complete semantic coverage.
+
+Unsupported or unqualified: cross-TU/commit/compiler symbol identity; exact variable/member read/write/address-use locations; all redeclarations; uninstantiated templates; inactive/folded-away references; complete C++ traversal, constructors, destructors and lambdas; full type-use/inheritance; macro-reference equivalence; indirect target resolution; Clang equivalence. GCC expression locations are not assumed to be identifier tokens. The common walker inventory is diagnostic, not proof of exhaustive traversal.
+
+The workflow retains the pinned IDF environment qualification and release input restoration, builds the plugin with the container host compiler against exact target GCC plugin headers, runs controls and selected units, then uploads evidence only. No index upload credentials are referenced. Xylem's current production schema has no GCC engine; production support needs a separately validated schema/adapter contract.
