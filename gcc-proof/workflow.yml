@@ -68,10 +68,16 @@ jobs:
           (cd evidence/host-gmp && apt-get download 'libgmp-dev=2:6.3.0+dfsg-2ubuntu6')
           deb=$(find "$PWD/evidence/host-gmp" -maxdepth 1 -name 'libgmp-dev_*.deb' -type f)
           test -n "$deb"
-          dpkg-deb --show "$deb" > evidence/host-gmp/package.txt
+          dpkg-deb -f "$deb" Package Version Architecture > evidence/host-gmp/package.txt
+          cp /var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_noble_InRelease evidence/host-gmp/noble-InRelease
+          mapfile -t package_indexes < <(find /var/lib/apt/lists -maxdepth 1 -type f -name 'archive.ubuntu.com_ubuntu_dists_noble_main_binary-amd64_Packages*')
+          test "${#package_indexes[@]}" -eq 1
+          /usr/lib/apt/apt-helper cat-file "${package_indexes[0]}" > evidence/host-gmp/noble-main-amd64-Packages
+          cp /usr/share/keyrings/ubuntu-archive-keyring.gpg evidence/host-gmp/ubuntu-archive-keyring.gpg
           sha256sum "$deb" > evidence/host-gmp/package-sha256.txt
           dpkg-deb --extract "$deb" evidence/host-gmp/extracted
           sha256sum evidence/host-gmp/extracted/usr/include/x86_64-linux-gnu/gmp.h > evidence/host-gmp/header-sha256.txt
+          python3 gcc-proof/verify_host_gmp.py evidence/host-gmp
           python3 gcc-proof/run-proof.py --host-gmp-include "$PWD/evidence/host-gmp/extracted/usr/include/x86_64-linux-gnu" --toolchain /opt/esp/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf --output evidence/gcc-proof --released
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

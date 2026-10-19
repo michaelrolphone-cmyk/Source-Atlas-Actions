@@ -2,6 +2,8 @@
 """Two exact translation units, GCC-native observations, never a production index."""
 import argparse, hashlib, json, pathlib, re, runpy, shlex, shutil, subprocess, sys
 HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from object_equivalence import compare_files
 C_UNIT = 'lib/elf_loader/src/esp_privileged_os_cpu.c'
 CPP_UNIT = 'src/runtime/serial/Files.cpp'
 SHA_COMMANDS = 'e77a0c9b1fb905316f0949766ede894f01bc705b26639a7296eb38e81f1a2cd5'
@@ -103,7 +105,11 @@ def run_unit(entry,root,plugin,out,label):
         write(out/(label+'-commands.json'),receipt)
     receipt.update(source_sha256_after=sha(source),source_unchanged=sha(source)==before,objects_identical=len(set(object_hashes))==1,normalized_events_repeatable=normalized(parsed[0])==normalized(parsed[1]))
     receipt['validation']=validate_common(parsed[0],root,receipt['unit'])
-    receipt['passed']=all((receipt['source_unchanged'],receipt['objects_identical'],receipt['normalized_events_repeatable'],receipt['validation']['passed']))
+    suffixes={r['attempt']:' '.join(x for x in r['effective_argv'] if x.startswith('-fplugin')) for r in receipt['runs']}
+    receipt['provenance_equivalence_checks']=[dict(pair=[a,b],**compare_files(out/(label+'-'+a+'.o'),out/(label+'-'+b+'.o'),suffixes[a],suffixes[b])) for a,b in [('baseline','instrumented-1'),('baseline','instrumented-2'),('instrumented-1','instrumented-2')]]
+    receipt['provenance_equivalent']=all(x['passed'] for x in receipt['provenance_equivalence_checks'])
+    receipt['object_fidelity_gate']='provenance_equivalent; raw objects_identical remains separately reported'
+    receipt['passed']=all((receipt['source_unchanged'],receipt['provenance_equivalent'],receipt['normalized_events_repeatable'],receipt['validation']['passed']))
     write(out/(label+'-commands.json'),receipt)
     require(receipt['passed'],f'{label} bounded fidelity gates failed; inspect receipt')
     return receipt
@@ -114,6 +120,7 @@ def controls(toolchain,plugin,out):
         src=HERE/('control.'+ext); compiler=toolchain/'bin'/('xtensa-esp32s3-elf-'+('gcc' if ext=='c' else 'g++'))
         entry={'file':str(src),'directory':str(HERE),'command':shlex.join([str(compiler),'-c',str(src),'-o','unused.o'])}
         proof=run_unit(entry,HERE,plugin,out,'control-'+ext)
+        require(proof['objects_identical'],'Non-debug controls must retain raw object identity')
         rows=records(out/('control-'+ext+'-instrumented-1.jsonl')); summary=rows[-1]
         require((summary['definitions'],summary['direct_calls'],summary['unresolved_indirect_calls'])==(expected_defs,expected_calls,expected_indirect),'Control count mismatch')
         calls=[x for x in rows if x['event']=='direct_call']
@@ -147,7 +154,7 @@ def main():
         entries=[x for x in units if x['file']==str(root/unit)];require(len(entries)==1,'Missing or duplicate exact unit')
         result=run_unit(entries[0],root,plugin,out,label);results.append(result)
         helper['verify_sources'](q)
-    report={'schema':'gcc-native-two-unit-proof/1','source_set_version':helper['SET_VERSION'],'source_pins':helper['PINS'],'original_commands_sha256':SHA_COMMANDS,'selected_units':2,'release_runtime_units':68,'selected_units_compiled':2,'fidelity_gates_passed':True,'production_upload':False,'whole_release_coverage_complete':False,'baseline_instrumented_objects_identical':all(x['objects_identical'] for x in results),'results':results}
+    report={'schema':'gcc-native-two-unit-proof/2','source_set_version':helper['SET_VERSION'],'source_pins':helper['PINS'],'original_commands_sha256':SHA_COMMANDS,'selected_units':2,'release_runtime_units':68,'selected_units_compiled':2,'fidelity_gates_passed':True,'production_upload':False,'whole_release_coverage_complete':False,'baseline_instrumented_objects_identical':all(x['objects_identical'] for x in results),'provenance_equivalent':all(x['provenance_equivalent'] for x in results),'results':results}
     write(out/'proof-summary.json',report)
     print(json.dumps({k:v for k,v in report.items() if k!='results'}))
 if __name__=='__main__': main()
