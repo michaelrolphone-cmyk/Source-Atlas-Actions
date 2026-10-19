@@ -35,7 +35,7 @@ jobs:
       - name: Qualify verifier and restore exact source checkouts
         run: |
           set -euo pipefail
-          python3 -m unittest discover -s tests -p test_wave063_inputs.py -v
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
           test "$SOURCE_SET_VERSION" = 56cd4156-61e1-406e-81f5-f188cb3969df
           root=/__w/_temp/wave-serial-logging-native
           test ! -e "$root"
@@ -63,7 +63,16 @@ jobs:
           set -euo pipefail
           echo '025b60ba6b80761e3a7049a4095a363f17f33f8902cc2695ad810cc73800caaa  /opt/esp/idf/export.sh' | sha256sum --check
           . /opt/esp/idf/export.sh
-          python3 gcc-proof/run-proof.py --toolchain /opt/esp/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf --output evidence/gcc-proof --released
+          mkdir -p evidence/host-gmp
+          apt-get update > evidence/host-gmp/apt-update.log 2>&1
+          (cd evidence/host-gmp && apt-get download 'libgmp-dev=2:6.3.0+dfsg-2ubuntu6')
+          deb=$(find "$PWD/evidence/host-gmp" -maxdepth 1 -name 'libgmp-dev_*.deb' -type f)
+          test -n "$deb"
+          dpkg-deb --show "$deb" > evidence/host-gmp/package.txt
+          sha256sum "$deb" > evidence/host-gmp/package-sha256.txt
+          dpkg-deb --extract "$deb" evidence/host-gmp/extracted
+          sha256sum evidence/host-gmp/extracted/usr/include/x86_64-linux-gnu/gmp.h > evidence/host-gmp/header-sha256.txt
+          python3 gcc-proof/run-proof.py --host-gmp-include "$PWD/evidence/host-gmp/extracted/usr/include/x86_64-linux-gnu" --toolchain /opt/esp/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf --output evidence/gcc-proof --released
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -72,6 +81,7 @@ jobs:
             evidence/*.json
             evidence/*.txt
             evidence/gcc-proof/
+            evidence/host-gmp/
             /__w/_temp/wave-serial-logging-native/build/log/
           retention-days: 30
           if-no-files-found: warn

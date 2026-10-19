@@ -11,3 +11,7 @@ Controls test C direct/indirect calls and C++ overload/member resolution, callsi
 Unsupported or unqualified: cross-TU/commit/compiler symbol identity; exact variable/member read/write/address-use locations; all redeclarations; uninstantiated templates; inactive/folded-away references; complete C++ traversal, constructors, destructors and lambdas; full type-use/inheritance; macro-reference equivalence; indirect target resolution; Clang equivalence. GCC expression locations are not assumed to be identifier tokens. The common walker inventory is diagnostic, not proof of exhaustive traversal.
 
 The workflow retains the pinned IDF environment qualification and release input restoration, builds the plugin with the container host compiler against exact target GCC plugin headers, runs controls and selected units, then uploads evidence only. No index upload credentials are referenced. Xylem's current production schema has no GCC engine; production support needs a separately validated schema/adapter contract.
+
+## Pinned host header correction
+
+The first isolated run39177170204 verified released inputs but the pinned IDF container lacked host gmp.h, so neither target unit ran. The successor extracts only the official Ubuntu noble amd64 libgmp-dev 2:6.3.0+dfsg-2ubuntu6 package through signed APT metadata. It installs no package and changes no target input. Package/header hashes and APT log are retained; the extra include applies only to host plugin compilation. The failed run remains preserved.

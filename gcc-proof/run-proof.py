@@ -125,12 +125,16 @@ def controls(toolchain,plugin,out):
     write(out/'controls.json',{'passed':True,'units':result})
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--toolchain',required=True);ap.add_argument('--output',required=True);ap.add_argument('--released',action='store_true');args=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--toolchain',required=True);ap.add_argument('--output',required=True);ap.add_argument('--released',action='store_true');ap.add_argument('--host-gmp-include');args=ap.parse_args()
     t=pathlib.Path(args.toolchain).resolve();out=pathlib.Path(args.output).resolve();out.mkdir(parents=True,exist_ok=True)
     plugin=out/'atlas_gcc_proof.so'; source=HERE/'source-atlas-gcc-proof.cc';inc=t/'lib/gcc/xtensa-esp-elf/15.2.0/plugin/include'
+    host_gmp = pathlib.Path(args.host_gmp_include).resolve() if args.host_gmp_include else None
+    if host_gmp: require((host_gmp/'gmp.h').is_file(),'Missing pinned host GMP header')
     build=['c++','-std=gnu++17','-shared','-fPIC','-fno-rtti','-O0','-g','-I'+str(inc),str(source),'-o',str(plugin)]
+    if host_gmp: build.insert(1,'-I'+str(host_gmp))
     execute(build,HERE,out/'plugin-build.log')
     provenance={'plugin_source_sha256':sha(source),'plugin_binary_sha256':sha(plugin),'build_command':build,'host_compiler_version':subprocess.check_output(['c++','--version'],text=True),'host_compiler_sha256':sha(pathlib.Path(shutil.which('c++')).resolve()),'toolchain_files':{str(p.relative_to(t)):sha(p) for p in [t/'bin/xtensa-esp-elf-gcc',t/'bin/xtensa-esp-elf-g++',t/'bin/xtensa-esp32s3-elf-gcc',t/'bin/xtensa-esp32s3-elf-g++',t/'libexec/gcc/xtensa-esp-elf/15.2.0/cc1',t/'libexec/gcc/xtensa-esp-elf/15.2.0/cc1plus']},'plugin_headers':{str(p.relative_to(inc)):sha(p) for p in sorted(inc.rglob('*')) if p.is_file()},'production_upload':False,'semantic_coverage_complete':False}
+    provenance['host_gmp_header'] = {'path':str(host_gmp/'gmp.h'),'sha256':sha(host_gmp/'gmp.h')} if host_gmp else {'source':'host default include search'}
     write(out/'plugin-provenance.json',provenance)
     controls(t,plugin,out)
     if not args.released:return
