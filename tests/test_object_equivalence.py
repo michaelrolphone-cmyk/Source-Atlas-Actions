@@ -3,8 +3,9 @@ sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'gcc-proof'))
 from object_equivalence import compare_bytes,EquivalenceError
 SUFFIX='-fplugin=/proof.so -fplugin-arg-proof-output=/proof.jsonl'
 BASE=b'GNU C23 15.2.0 -gdwarf-4 -Os'
-def fixture(suffix='', change=None):
+def fixture(suffix='', change=None, groups=False):
     names=['.text','.data','.bss','.empty','.rela.text','.symtab','.strtab','.debug_info','.rela.debug_info','.debug_abbrev','.debug_str','.debug_line','.shstrtab']
+    if groups:names=['.group','.group']+names
     producer=BASE+(b' '+suffix.encode() if suffix else b'')
     strings=[producer,b'unit.c',b'int',b'function',b'unreferenced']
     if suffix:strings.reverse()
@@ -25,7 +26,7 @@ def fixture(suffix='', change=None):
     body=struct.pack('<HIB',4,0,4)+root+type_die+sub+b'\0'
     info=struct.pack('<I',len(body))+body
     if change=='unsupported-form':abbrev=abbrev[:5]+bytes([0x7f])+abbrev[6:]
-    payload={'.text':b'\x01\x02\x03\x04','.data':b'\x05\x06\x07\x08','.bss':b'', '.empty':b'', '.rela.text':bytes(12),'.symtab':bytes(16)+struct.pack('<IIIBBH',0,1 if change=='reloc-symbol-value' else 0,0,3,0,names.index('.debug_str')+1),'.strtab':b'\0symbol\0','.debug_info':info,'.debug_abbrev':abbrev,'.debug_str':pool,'.debug_line':b'line-table'}
+    payload={'.text':b'\x01\x02\x03\x04','.data':b'\x05\x06\x07\x08','.bss':b'', '.empty':b'', '.rela.text':bytes(12),'.symtab':bytes(16)+struct.pack('<IIIBBH',0,1 if change=='reloc-symbol-value' else 0,0,3,0,names.index('.debug_str')+1),'.strtab':b'\0symbol\0second\0','.debug_info':info,'.debug_abbrev':abbrev,'.debug_str':pool,'.debug_line':b'line-table'}
     payload['.rela.debug_info']=b''.join(struct.pack('<IIi',pos,(1<<8)|(2 if change=='reloc-type' else 1),1 if change=='reloc-addend' else 0) for pos in ([12,16,21,28] if change!='reloc-missing' else [12,16,21]))
     if change=='pdiff-outside':payload['.rela.debug_info']+=struct.pack('<IIi',34,59,0)
     if change=='pdiff-overlap':payload['.rela.debug_info']+=struct.pack('<IIi',13,59,0)
@@ -35,16 +36,25 @@ def fixture(suffix='', change=None):
     if change in ('code','data','relocation','symbol','debug-line'):
         section={'code':'.text','data':'.data','relocation':'.rela.text','symbol':'.symtab','debug-line':'.debug_line'}[change]
         value=payload[section];payload[section]=bytes([value[0]^1])+value[1:]
+    if groups:payload['.symtab']+=struct.pack('<IIIBBH',1,0,0,0x11,0,names.index('.text')+1)+struct.pack('<IIIBBH',1 if change=='group-signature-name' else 8,0,0,0x11,0,names.index('.data')+1)
     shnames=b'\0'+b''.join(n.encode()+b'\0' for n in names);payload['.shstrtab']=shnames
     headers=[(0,0,0,0,0,0,0,0,0,0)];raw=bytearray(52)
+    group_number=0
     for n in names:
-        typ=8 if n=='.bss' else 4 if n.startswith('.rela.') else 2 if n=='.symtab' else 3 if n in ('.strtab','.shstrtab') else 1
+        if n=='.group':
+            group_number+=1
+            member=names.index('.text' if group_number==1 else '.data')+1
+            if change=='group-member' and group_number==2:member=names.index('.text')+1
+            payload[n]=struct.pack('<II',1,member)
+        typ=17 if n=='.group' else 8 if n=='.bss' else 4 if n.startswith('.rela.') else 2 if n=='.symtab' else 3 if n in ('.strtab','.shstrtab') else 1
         flags=6 if n=='.text' else 3 if n in ('.data','.bss') else 0
+        if n=='.group' and change=='group-flags':flags=1
+        if groups and n in ('.text','.data'):flags|=0x200
         if n=='.text' and change=='flags':flags^=1
-        align=4 if n in ('.text','.data','.bss','.empty','.rela.text','.symtab') else 1
+        align=4 if n in ('.group','.text','.data','.bss','.empty','.rela.text','.symtab') else 1
         if n=='.text' and change=='alignment':align=8
         raw+=bytes((-len(raw))%align);offset=len(raw);value=payload[n]
-        headers.append((shnames.index(n.encode()+b'\0'),typ,flags,0,offset,4 if n=='.bss' else len(value),names.index('.symtab')+1 if n.startswith('.rela.') else 0,names.index('.debug_info')+1 if n=='.rela.debug_info' else 1 if n=='.rela.text' else 0,align,12 if n.startswith('.rela.') else 16 if n=='.symtab' else 0));raw+=value
+        headers.append((shnames.index(n.encode()+b'\0'),typ,flags,0,offset,4 if n=='.bss' else len(value),names.index('.symtab')+1 if n.startswith('.rela.') or n=='.group' else names.index('.strtab')+1 if n=='.symtab' else 0,(2 if change=='group-signature' else group_number+1) if n=='.group' else names.index('.debug_info')+1 if n=='.rela.debug_info' else 1 if n=='.rela.text' else 0,align,4 if n=='.group' else 12 if n.startswith('.rela.') else 16 if n=='.symtab' else 0));raw+=value
     raw+=bytes((-len(raw))%4);shoff=len(raw)
     for h in headers:raw+=struct.pack('<10I',*h)
     raw[:52]=struct.pack('<16sHHIIIIIHHHHHH',b'\x7fELF\x01\x01\x01'+bytes(9),1,94,1,0,0,shoff,0x300,52,0,0,40,len(headers),len(headers)-1)
@@ -64,6 +74,17 @@ class ObjectEquivalence(unittest.TestCase):
                 with self.assertRaises(EquivalenceError):compare_bytes(fixture(),fixture(SUFFIX,mutation),'',SUFFIX)
     def test_pdiff32_outside_strp(self):
         self.assertTrue(compare_bytes(fixture(change='pdiff-outside'),fixture(SUFFIX,'pdiff-outside'),'',SUFFIX)['passed'])
+    def test_ordered_comdat_groups(self):
+        self.assertTrue(compare_bytes(fixture(groups=True),fixture(SUFFIX,groups=True),'',SUFFIX)['passed'])
+    def test_comdat_group_mutations_rejected(self):
+        for mutation in ('group-member','group-signature','group-signature-name','group-flags'):
+            with self.subTest(mutation=mutation):
+                with self.assertRaises(EquivalenceError):compare_bytes(fixture(groups=True),fixture(SUFFIX,mutation,groups=True),'',SUFFIX)
+    def test_group_header_reorder_rejected(self):
+        raw=bytearray(fixture(SUFFIX,groups=True));shoff=struct.unpack_from('<I',raw,32)[0]
+        first=bytes(raw[shoff+40:shoff+80]);second=bytes(raw[shoff+80:shoff+120])
+        raw[shoff+40:shoff+80]=second;raw[shoff+80:shoff+120]=first
+        with self.assertRaises(EquivalenceError):compare_bytes(fixture(groups=True),bytes(raw),'',SUFFIX)
     def test_wrong_recorded_suffix_rejected(self):
         with self.assertRaises(EquivalenceError):compare_bytes(fixture(),fixture(SUFFIX),'',SUFFIX+' -fextra')
     def test_missing_producer_allowance_rejected(self):

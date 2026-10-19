@@ -34,12 +34,35 @@ def elf(raw):
     names_header=headers[h[13]];need(names_header[1]==3,'Missing section-name string table')
     names=raw[names_header[4]:names_header[4]+names_header[5]]; sections={};occupied=[]
     for i,s in enumerate(headers):
-        name=cstring(names,s[0])[0].decode('ascii');need(name not in sections,'Duplicate section name')
+        name=cstring(names,s[0])[0].decode('ascii')
+        # GCC C++ emits multiple SHT_GROUP sections named .group. Preserve each
+        # ordered section index; never merge their identities by shared name.
+        need(not name.startswith('.group@'),'Reserved structural key collision')
+        key='.group@'+str(i) if name=='.group' and s[1]==17 else name
+        need(key not in sections,'Duplicate section name')
+        need((name=='.group')==(s[1]==17),'Unsupported group section identity')
         need(s[8]==0 or s[8]&(s[8]-1)==0,'Invalid section alignment')
         need(s[4]<=h[6] and (s[1]==8 or s[4]+s[5]<=h[6]),'Section outside payload region')
         content=raw[s[4]:s[4]+s[5]] if s[1]!=8 else b''
-        sections[name]={'index':i,'header':s,'data':content}
-        if content and i:occupied.append((s[4],s[4]+s[5],max(1,s[8]),name))
+        sections[key]={'index':i,'name':name,'header':s,'data':content}
+        if content and i:occupied.append((s[4],s[4]+s[5],max(1,s[8]),key))
+    grouped=set();signatures=set()
+    for section in sections.values():
+        s=section['header']
+        if s[1]!=17:continue
+        need(s[2]==0 and s[8]==4 and s[9]==4 and len(section['data'])>=8 and len(section['data'])%4==0,'Invalid group encoding')
+        words=struct.unpack('<'+'I'*(len(section['data'])//4),section['data'])
+        need(words[0]==1 and 0<s[6]<len(headers),'Expected COMDAT group and symbol linkage')
+        symbols=headers[s[6]];need(symbols[1]==2 and symbols[9]==16 and 0<s[7]<symbols[5]//16,'Invalid COMDAT signature symbol')
+        need(0<symbols[6]<len(headers) and headers[symbols[6]][1]==3,'Invalid COMDAT signature string table')
+        signature=struct.unpack_from('<IIIBBH',raw,symbols[4]+s[7]*16)
+        string_header=headers[symbols[6]];symbol_strings=raw[string_header[4]:string_header[4]+string_header[5]]
+        signature_name=cstring(symbol_strings,signature[0])[0]
+        need(signature_name and signature_name not in signatures,'Ambiguous COMDAT signature');signatures.add(signature_name)
+        for member in words[1:]:
+            need(0<member<len(headers) and member not in grouped and headers[member][2]&0x200,'Invalid or ambiguous group membership')
+            grouped.add(member)
+    need(grouped=={i for i,s in enumerate(headers) if s[2]&0x200},'Orphan group-flagged section')
     end=52; order=[]
     for start,stop,alignment,name in sorted(occupied):
         need(start==(end+alignment-1)//alignment*alignment,'Unexpected gap, overlap or section order')

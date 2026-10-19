@@ -27,3 +27,9 @@ All other section contents are exact, including executable/data, all relocation/
 Negative controls reject changed lines, type sizes/references, names, unknown/duplicate/unreferenced strings, producer aliases, strp retargeting, unexpected producer options, code/data/relocation/symbol bytes, line tables, flags/alignment, NULL/NOBITS/empty offsets, unknown forms and truncation. This qualifies only narrow object equivalence and selected source-observation gates, not exhaustive semantic/debug correctness or complete reference coverage. The synthetic non-debug controls still require raw object identity.
 
 The successor also retains the official Ubuntu archive keyring, InRelease and uncompressed noble/main amd64 Packages. gpgv checks the signature, then SHA256/size checks bind Packages to InRelease and the pinned libgmp-dev package to Packages; exact package version/architecture and extracted header hash are checked before plugin compilation. These are host-header inputs only.
+
+## Ordered C++ COMDAT layout
+
+Run 39184818970 verified the signed host-header chain and compiled both selected units three times. All selected source-observation gates passed, but the checker conservatively rejected the C++ object's 21 same-named .group sections. Its 273-section ordered layout differs only in .debug_info/.debug_str payloads.
+
+The bounded successor retains each SHT_GROUP .group section by its original section index. It compares all group headers, signature symbol indices, symbol-table bytes, membership payloads, section links and relocation targets exactly. Membership/signature ambiguity, orphan group flags, invalid encodings and section reordering fail. Other duplicate section names remain unsupported. This changes only structural recognition; the sole producer/debug-string exception and separate raw-identity result are unchanged.
