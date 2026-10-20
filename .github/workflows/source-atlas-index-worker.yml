@@ -40,7 +40,7 @@ jobs:
             const retry=r.headers.get('retry-after');if(retry)remember(Number.isFinite(Number(retry))?new Date(now()+Number(retry)*1000).toISOString():retry);
             let data;try{data=await r.json();}catch{throw Error('Xylem '+body.operation+' callback HTTP '+r.status+': non-JSON response; outcome unknown');}
             remember(data?.next_retry_at);remember(data?.job?.next_retry_at);
-            if(!r.ok||!data||typeof data!=='object'||Array.isArray(data)||data.error)throw Error('Xylem '+body.operation+' callback HTTP '+r.status+' failed ('+(data?.code||'invalid response')+'); outcome unknown');
+            if(!r.ok||!data||typeof data!=='object'||Array.isArray(data)||(data.error&&!(body.operation==='continue'&&data.accepted===false&&(data.waiting===true||data.busy===true))))throw Error('Xylem '+body.operation+' callback HTTP '+r.status+' failed ('+(data?.code||'invalid response')+'); outcome unknown');
             const valid=body.operation==='process'?(data.idle===true||data.busy===true||data.waiting===true||typeof data.job?.state==='string'):
              body.operation==='heartbeat'?data.recorded===true:
              body.operation==='continue'?typeof data.accepted==='boolean'&&(data.accepted||data.idle===true||data.busy===true||data.waiting===true||typeof data.recovery_action==='string'):
