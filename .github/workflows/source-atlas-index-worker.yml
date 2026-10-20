@@ -31,30 +31,54 @@ jobs:
           ATLAS_NOT_BEFORE: ${{ inputs.not_before }}
         run: |
           node --input-type=module <<'ATLAS_RUNNER'
-          // Xylem managed runner. Secrets are injected by GitHub Actions, never source.
-          export async function runActions(env=process.env,{budget=45*60000,handoffBudget=4*60000,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}){
-           const call=async body=>{const r=await fetch(env.ATLAS_URL+'/api/worker',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.INDEX_WORKER_TOKEN,'OAI-Sites-Authorization':'Bearer '+env.SITES_SERVICE_TOKEN},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)});const data=await r.json().catch(()=>({error:'Non-JSON response'}));if(!r.ok)throw Error('Xylem callback '+r.status+': '+JSON.stringify(data));return data;};
+          // Xylem managed runner. Kept self-contained because workflowSource embeds it verbatim.
+          export async function runActions(env=process.env,{budget=45*60000,handoffBudget=4*60000,sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now()}={}){
+           const start=now();let cycles=0,next_retry_at=env.ATLAS_NOT_BEFORE||null,unfinished=true,continuationAttempted=false,continuation=null;
+           const remember=value=>{const t=Date.parse(value);if(Number.isFinite(t)&&t>Math.max(now(),Date.parse(next_retry_at)||0))next_retry_at=new Date(t).toISOString();};
+           const call=async body=>{
+            let r;try{r=await fetch(env.ATLAS_URL+'/api/worker',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.INDEX_WORKER_TOKEN,'OAI-Sites-Authorization':'Bearer '+env.SITES_SERVICE_TOKEN},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)});}catch{throw Error('Xylem '+body.operation+' callback transport failure; outcome unknown');}
+            const retry=r.headers.get('retry-after');if(retry)remember(Number.isFinite(Number(retry))?new Date(now()+Number(retry)*1000).toISOString():retry);
+            let data;try{data=await r.json();}catch{throw Error('Xylem '+body.operation+' callback HTTP '+r.status+': non-JSON response; outcome unknown');}
+            remember(data?.next_retry_at);remember(data?.job?.next_retry_at);
+            if(!r.ok||!data||typeof data!=='object'||Array.isArray(data)||data.error)throw Error('Xylem '+body.operation+' callback HTTP '+r.status+' failed ('+(data?.code||'invalid response')+'); outcome unknown');
+            const valid=body.operation==='process'?(data.idle===true||data.busy===true||data.waiting===true||typeof data.job?.state==='string'):
+             body.operation==='heartbeat'?data.recorded===true:
+             body.operation==='continue'?typeof data.accepted==='boolean'&&(data.accepted||data.idle===true||data.busy===true||data.waiting===true||typeof data.recovery_action==='string'):
+             body.operation==='deliver_notifications'?Number.isInteger(data.pending):
+             body.operation==='refresh_due'?(data.due===false||data.busy===true||data.waiting===true||Array.isArray(data.results)):false;
+            if(!valid)throw Error('Xylem '+body.operation+' callback HTTP '+r.status+': invalid operation response; outcome unknown');
+            return data;
+           };
            const trigger=env.ATLAS_TRIGGER==='schedule'?'scheduled':env.ATLAS_CONTINUATION?'continuation':'requested',run_id=env.GITHUB_RUN_ID||null,run_url=run_id?'https://github.com/'+env.GITHUB_REPOSITORY+'/actions/runs/'+run_id:null;
-           const heartbeat=(phase,extra={})=>call({operation:'heartbeat',trigger,phase,provider:'github_actions',run_id,run_url,...extra});
-           const continueWork=async()=>{const deadline=Date.now()+handoffBudget;for(;;){const result=await call({operation:'continue',run_id,next_retry_at});if(result.accepted||result.idle||!result.waiting&&!result.busy)return result;
-            const retryAt=result.next_retry_at?Date.parse(result.next_retry_at):Date.now()+(result.retry_after_seconds||2)*1000;
-            if(retryAt>=deadline)return {...result,recovery_action:'watchdog_retry_after_deadline'};
-            do{await heartbeat('waiting',{cycles,next_retry_at:new Date(retryAt).toISOString(),continuation:result});await sleep(Math.min(30000,Math.max(1,retryAt-Date.now())));}while(Date.now()<retryAt);
-            if(Date.now()>=deadline)return {...result,recovery_action:'watchdog_retry_after_deadline'};
+           const heartbeat=(phase,extra={})=>call({operation:'heartbeat',trigger,phase,provider:'github_actions',run_id,run_url,next_retry_at,...extra});
+           const continueWork=async()=>{const deadline=now()+handoffBudget;for(;;){
+            // A lost POST response cannot be replayed safely. Only explicit busy/waiting permits retry.
+            continuationAttempted=true;continuation={accepted:false,unknown:true,recovery_action:'inspect_handoff'};
+            const result=await call({operation:'continue',run_id,next_retry_at});continuation=result;
+            if(result.accepted||result.idle||!result.waiting&&!result.busy)return result;
+            const retryAt=result.next_retry_at?Date.parse(result.next_retry_at):now()+(result.retry_after_seconds||2)*1000;
+            if(!Number.isFinite(retryAt)||retryAt>=deadline)return {...result,recovery_action:'watchdog_retry_after_deadline'};
+            do{await heartbeat('waiting',{cycles,continuation:result});await sleep(Math.min(30000,Math.max(1,retryAt-now())));}while(now()<retryAt);
+            if(now()>=deadline)return {...result,recovery_action:'watchdog_retry_after_deadline'};
            }};
-           const start=Date.now();let cycles=0,next_retry_at=env.ATLAS_NOT_BEFORE||null,unfinished=true;await heartbeat('started');
-           try{let refreshed=false;do{
-           if(next_retry_at){const wait=Math.max(0,Date.parse(next_retry_at)-Date.now());if(wait>0){if(Date.now()-start+Math.min(wait,30000)>=budget)break;await sleep(Math.min(wait,30000));await heartbeat('waiting',{cycles,next_retry_at});continue;}next_retry_at=null;}
-           const r=await call({operation:'process'});cycles++;await call({operation:'deliver_notifications'});await heartbeat('running',{cycles});
-           if(r.waiting||r.busy){if(r.automatic_retry===false){unfinished=false;break;}next_retry_at=r.next_retry_at||r.job?.next_retry_at||new Date(Date.now()+1500).toISOString();continue;}
-           if(r.idle&&!refreshed){refreshed=true;const refresh=await call({operation:'refresh_due'});if(refresh.waiting)next_retry_at=refresh.next_retry_at;continue;}
-           if(r.idle){unfinished=false;break;}
-           }while(Date.now()-start<budget);
-           // The successor is queued before this run ends. GitHub concurrency prevents
-           // overlap; Site leases/checkpoints protect against duplicate delivery.
-           const continuation=unfinished?await continueWork():null;
-           await heartbeat('finished',{cycles,continuation});return {cycles,continuation};}
-           catch(e){await heartbeat('failed',{cycles,error:String(e)}).catch(()=>{});next_retry_at=new Date(Date.now()+30000).toISOString();await continueWork().catch(()=>{});throw e;}
+           try{await heartbeat('started');let refreshed=false;do{
+            if(next_retry_at){const wait=Math.max(0,Date.parse(next_retry_at)-now());if(wait>0){if(now()-start+Math.min(wait,30000)>=budget)break;await sleep(Math.min(wait,30000));await heartbeat('waiting',{cycles});continue;}next_retry_at=null;}
+            const r=await call({operation:'process'});cycles++;
+            // Capture deadlines before ancillary callbacks can fail.
+            if((r.waiting||r.busy)&&!r.next_retry_at&&!r.job?.next_retry_at)remember(new Date(now()+1500).toISOString());
+            await call({operation:'deliver_notifications'});await heartbeat('running',{cycles});
+            if(r.waiting||r.busy||next_retry_at){if(r.automatic_retry===false){unfinished=false;break;}continue;}
+            if(r.idle&&!refreshed){refreshed=true;await call({operation:'refresh_due'});continue;}
+            if(r.idle){unfinished=false;break;}
+           }while(now()-start<budget);
+           if(unfinished)continuation=await continueWork();
+           await heartbeat('finished',{cycles,continuation});return {cycles,continuation};
+           }catch(e){remember(new Date(now()+30000).toISOString());
+            // Suppress the legacy server-side handoff: this runner owns exactly one handoff path.
+            await heartbeat('failed',{cycles,error:String(e),continuation:continuation||{accepted:false,managed:true}}).catch(()=>{});
+            if(!continuationAttempted)await continueWork().catch(()=>{});
+            throw e;
+           }
           }
           
           await runActions();
