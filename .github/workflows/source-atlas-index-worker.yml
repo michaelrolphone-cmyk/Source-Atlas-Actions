@@ -32,21 +32,29 @@ jobs:
         run: |
           node --input-type=module <<'ATLAS_RUNNER'
           // Xylem managed runner. Kept self-contained because workflowSource embeds it verbatim.
-          export async function runActions(env=process.env,{budget=45*60000,handoffBudget=4*60000,sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now()}={}){
-           const start=now();let cycles=0,next_retry_at=env.ATLAS_NOT_BEFORE||null,unfinished=true,continuationAttempted=false,continuation=null;
+          export async function runActions(env=process.env,{budget=45*60000,handoffBudget=4*60000,sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),emit=message=>console.info(JSON.stringify(message))}={}){
+           const start=now();let cycles=0,next_retry_at=env.ATLAS_NOT_BEFORE||null,unfinished=true,continuationAttempted=false,continuation=null,requestSequence=0,lastFailure=null;
            const remember=value=>{const t=Date.parse(value);if(Number.isFinite(t)&&t>Math.max(now(),Date.parse(next_retry_at)||0))next_retry_at=new Date(t).toISOString();};
            const call=async body=>{
-            let r;try{r=await fetch(env.ATLAS_URL+'/api/worker',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.INDEX_WORKER_TOKEN,'OAI-Sites-Authorization':'Bearer '+env.SITES_SERVICE_TOKEN},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)});}catch{throw Error('Xylem '+body.operation+' callback transport failure; outcome unknown');}
+            const request_id='actions-'+(env.GITHUB_RUN_ID||'local')+'-'+(env.GITHUB_RUN_ATTEMPT||'1')+'-'+(++requestSequence),began=now();
+            const record=(outcome,extra={})=>{const details={request_id,run_id:env.GITHUB_RUN_ID||null,operation:body.operation,outcome,elapsed_ms:now()-began,...extra};if(body.operation==='process'||outcome==='failed')emit(details);return details;};
+            record('started');
+            let r;try{r=await fetch(env.ATLAS_URL+'/api/worker',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.INDEX_WORKER_TOKEN,'OAI-Sites-Authorization':'Bearer '+env.SITES_SERVICE_TOKEN,'X-Xylem-Request-Id':request_id,'X-Xylem-Operation':body.operation,'X-Xylem-Run-Id':env.GITHUB_RUN_ID||'','Connection':'close'},body:JSON.stringify({...body,request_id,run_id:env.GITHUB_RUN_ID||body.run_id||null}),signal:AbortSignal.timeout(180000)});}catch(error){
+             const token=v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(v)?v:null;
+             lastFailure=record('failed',{error_name:token(error?.name),cause_code:token(error?.cause?.code)||token(error?.code),timeout:error?.name==='TimeoutError'||error?.name==='AbortError',response_received:false,outcome_unknown:true});
+             throw Error('Xylem '+body.operation+' callback transport failure; outcome unknown; request_id='+request_id+' elapsed_ms='+lastFailure.elapsed_ms+' error='+lastFailure.error_name+' cause='+lastFailure.cause_code);
+            }
+            record('response',{status:r.status,ray_id:r.headers.get('cf-ray')||null,server_request_id:r.headers.get('x-xylem-request-id')||null});
             const retry=r.headers.get('retry-after');if(retry)remember(Number.isFinite(Number(retry))?new Date(now()+Number(retry)*1000).toISOString():retry);
-            let data;try{data=await r.json();}catch{throw Error('Xylem '+body.operation+' callback HTTP '+r.status+': non-JSON response; outcome unknown');}
+            let data;try{data=await r.json();}catch(error){lastFailure=record('failed',{response_received:true,status:r.status,phase:'response-body',outcome_unknown:true});throw Error('Xylem '+body.operation+' callback HTTP '+r.status+': non-JSON response or body read failure; outcome unknown; request_id='+request_id+' elapsed_ms='+(now()-began));}
             remember(data?.next_retry_at);remember(data?.job?.next_retry_at);
-            if(!r.ok||!data||typeof data!=='object'||Array.isArray(data)||(data.error&&!(body.operation==='continue'&&data.accepted===false&&(data.waiting===true||data.busy===true))))throw Error('Xylem '+body.operation+' callback HTTP '+r.status+' failed ('+(data?.code||'invalid response')+'); outcome unknown');
+            if(!r.ok||!data||typeof data!=='object'||Array.isArray(data)||(data.error&&!(body.operation==='continue'&&data.accepted===false&&(data.waiting===true||data.busy===true))))throw Error('Xylem '+body.operation+' callback HTTP '+r.status+' failed ('+(data?.code||'invalid response')+'); outcome unknown; request_id='+request_id+' elapsed_ms='+(now()-began));
             const valid=body.operation==='process'?(data.idle===true||data.busy===true||data.waiting===true||typeof data.job?.state==='string'):
              body.operation==='heartbeat'?data.recorded===true:
              body.operation==='continue'?typeof data.accepted==='boolean'&&(data.accepted||data.idle===true||data.busy===true||data.waiting===true||typeof data.recovery_action==='string'):
              body.operation==='deliver_notifications'?Number.isInteger(data.pending):
              body.operation==='refresh_due'?(data.due===false||data.busy===true||data.waiting===true||Array.isArray(data.results)):false;
-            if(!valid)throw Error('Xylem '+body.operation+' callback HTTP '+r.status+': invalid operation response; outcome unknown');
+            if(!valid)throw Error('Xylem '+body.operation+' callback HTTP '+r.status+': invalid operation response; outcome unknown; request_id='+request_id+' elapsed_ms='+(now()-began));
             return data;
            };
            const trigger=env.ATLAS_TRIGGER==='schedule'?'scheduled':env.ATLAS_CONTINUATION?'continuation':'requested',run_id=env.GITHUB_RUN_ID||null,run_url=run_id?'https://github.com/'+env.GITHUB_REPOSITORY+'/actions/runs/'+run_id:null;
@@ -75,7 +83,7 @@ jobs:
            await heartbeat('finished',{cycles,continuation});return {cycles,continuation};
            }catch(e){remember(new Date(now()+30000).toISOString());
             // Suppress the legacy server-side handoff: this runner owns exactly one handoff path.
-            await heartbeat('failed',{cycles,error:String(e),continuation:continuation||{accepted:false,managed:true}}).catch(()=>{});
+            await heartbeat('failed',{cycles,error:String(e),failure:lastFailure,continuation:continuation||{accepted:false,managed:true}}).catch(()=>{});
             if(!continuationAttempted)await continueWork().catch(()=>{});
             throw e;
            }
