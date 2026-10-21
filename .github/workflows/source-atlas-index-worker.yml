@@ -10,13 +10,14 @@ on:
       not_before:
         type: string
         required: false
+  schedule:
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
 permissions: {}
 concurrency:
   group: source-atlas-index-worker
   cancel-in-progress: false
 jobs:
   index:
-    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
