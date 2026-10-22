@@ -35,7 +35,7 @@ jobs:
           export async function runActions(env=process.env,{budget=45*60000,handoffBudget=4*60000,sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),emit=message=>console.info(JSON.stringify(message))}={}){
            const start=now();let cycles=0,next_retry_at=env.ATLAS_NOT_BEFORE||null,unfinished=true,continuationAttempted=false,continuation=null,requestSequence=0,lastFailure=null;
            const remember=value=>{const t=Date.parse(value);if(Number.isFinite(t)&&t>Math.max(now(),Date.parse(next_retry_at)||0))next_retry_at=new Date(t).toISOString();};
-           const call=async body=>{
+           const callOnce=async body=>{
             lastFailure=null;let responseDetails={};
             const token=v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,120}$/.test(v)?v:null;
             const request_id='actions-'+(env.GITHUB_RUN_ID||'local')+'-'+(env.GITHUB_RUN_ATTEMPT||'1')+'-'+(++requestSequence),began=now();
@@ -51,7 +51,12 @@ jobs:
             const retry=r.headers.get('retry-after');if(retry)remember(Number.isFinite(Number(retry))?new Date(now()+Number(retry)*1000).toISOString():retry);
             let data;try{data=await r.json();}catch(error){lastFailure=record('failed',{response_received:true,phase:'response-body',error_name:token(error?.name),cause_code:token(error?.cause?.code)||token(error?.code),timeout:error?.name==='TimeoutError'||error?.name==='AbortError',outcome_unknown:true});throw Error('Xylem '+body.operation+' callback HTTP '+r.status+': non-JSON response or body read failure; outcome unknown; request_id='+request_id+' elapsed_ms='+(now()-began));}
             remember(data?.next_retry_at);remember(data?.job?.next_retry_at);
-            if(!r.ok||!data||typeof data!=='object'||Array.isArray(data)||(data.error&&!(body.operation==='continue'&&data.accepted===false&&(data.waiting===true||data.busy===true)))){lastFailure=record('failed',{response_received:true,phase:'response-validation',outcome_unknown:true});throw Error('Xylem '+body.operation+' callback HTTP '+r.status+' failed ('+(data?.code||'invalid response')+'); outcome unknown; request_id='+request_id+' elapsed_ms='+(now()-began));}
+            if(!r.ok||!data||typeof data!=='object'||Array.isArray(data)||(data.error&&!(body.operation==='continue'&&data.accepted===false&&(data.waiting===true||data.busy===true)))){
+             const beforeExecution=r.status===503&&data?.code==='worker_authorization_storage_unavailable'&&data.correlation_id===request_id&&responseDetails.server_request_id===request_id&&data.operation_started===false&&data.retryable_before_execution===true;
+             const failure=data?.failure||{},storage_error=['sqlite_error','d1_internal','object_storage_internal','object_storage_read_concurrency','storage_transport'].includes(failure.storage_error)?failure.storage_error:null;
+             lastFailure=record('failed',{response_received:true,phase:'response-validation',server_code:token(data?.code),server_stage:token(failure.server_stage),storage_error,...(typeof data?.operation_started==='boolean'?{operation_started:data.operation_started}:{}),outcome_unknown:!beforeExecution});
+             throw Object.assign(Error('Xylem '+body.operation+' callback HTTP '+r.status+' failed ('+(token(data?.code)||'invalid response')+'); '+(beforeExecution?'operation not started':'outcome unknown')+'; request_id='+request_id+' elapsed_ms='+(now()-began)),{beforeExecution,retryMs:Math.max(1000,Number(data?.retry_after_seconds||1)*1000)});
+            }
             const valid=body.operation==='process'?(data.idle===true||data.busy===true||data.waiting===true||typeof data.job?.state==='string'):
              body.operation==='heartbeat'?data.recorded===true:
              body.operation==='continue'?typeof data.accepted==='boolean'&&(data.accepted||data.idle===true||data.busy===true||data.waiting===true||typeof data.recovery_action==='string'):
@@ -59,6 +64,14 @@ jobs:
              body.operation==='refresh_due'?(data.due===false||data.busy===true||data.waiting===true||Array.isArray(data.results)):false;
             if(!valid){lastFailure=record('failed',{response_received:true,phase:'response-validation',outcome_unknown:true});throw Error('Xylem '+body.operation+' callback HTTP '+r.status+': invalid operation response; outcome unknown; request_id='+request_id+' elapsed_ms='+(now()-began));}
             return data;
+           };
+           const call=async body=>{
+            for(let attempt=0;;attempt++)try{return await callOnce(body);}catch(error){
+             // Retry only a correlated server refusal proving that authorization failed
+             // before execution. Lost/timeout/uncertain responses are never replayed.
+             if(!error.beforeExecution||attempt>=2||error.retryMs>30000||now()-start+error.retryMs>=budget)throw error;
+             await sleep(error.retryMs);
+            }
            };
            const trigger=env.ATLAS_TRIGGER==='schedule'?'scheduled':env.ATLAS_CONTINUATION?'continuation':'requested',run_id=env.GITHUB_RUN_ID||null,run_url=run_id?'https://github.com/'+env.GITHUB_REPOSITORY+'/actions/runs/'+run_id:null;
            const heartbeat=(phase,extra={})=>call({operation:'heartbeat',trigger,phase,provider:'github_actions',run_id,run_url,next_retry_at,...extra});
