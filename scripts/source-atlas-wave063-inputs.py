@@ -7,7 +7,9 @@ release's recorded IDF reconfigure command. Original command bytes are retained.
 import argparse
 import hashlib
 import json
+import os
 import pathlib
+import re
 import shlex
 import subprocess
 import zipfile
@@ -81,7 +83,20 @@ def verify_sources(q, root=ROOT, sdk=pathlib.Path('/opt/esp/idf')):
     return checked
 
 
+def verify_environment(environ=None):
+    environ = os.environ if environ is None else environ
+    expected = {'IDF_PATH': '/opt/esp/idf',
+                'IDF_PYTHON_ENV_PATH': '/opt/esp/python_env/idf6.1_py3.12_env'}
+    for key, value in expected.items():
+        require(environ.get(key) == value, 'Missing or incorrect ' + key + '; source the pinned export.sh')
+    version = environ.get('ESP_IDF_VERSION', '')
+    require(re.fullmatch(r'6\.1(?:\.0)?', version) is not None,
+            'Missing or incorrect ESP_IDF_VERSION; source the pinned export.sh')
+    return dict(expected, ESP_IDF_VERSION=version)
+
+
 def reconfigure(q, config, root=ROOT):
+    verify_environment()
     build = root / 'build'
     build.mkdir(parents=True, exist_ok=True)
     (build / 'sdkconfig').write_bytes(config)
@@ -150,6 +165,7 @@ def main():
                'source_set_version': SET_VERSION, 'source_pins': PINS, 'total_release_units': 930,
                'selected_runtime_units': len(units), 'source_and_toolchain_files_verified': checked,
                'generated_headers_verified': headers, 'compiler_probes': probes,
+               'idf_environment': verify_environment(),
                'firmware_rebuilt': False, 'scope': 'Runtime translation units only; other repositories remain unqualified'}
     (out / 'input-verification.json').write_text(json.dumps(receipt, indent=2) + '\n')
     print(json.dumps({k: v for k, v in receipt.items() if k != 'compiler_probes'}))

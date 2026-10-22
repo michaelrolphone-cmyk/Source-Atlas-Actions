@@ -50,6 +50,11 @@ jobs:
       - name: Verify released inputs and regenerate only matching configuration headers
         run: |
           set -euo pipefail
+          test "$(git -C /opt/esp/idf rev-parse HEAD)" = fff9895c82d744c7237be8847347bdd1b07c6643
+          test -z "$(git -C /opt/esp/idf status --porcelain --untracked-files=no)"
+          echo '025b60ba6b80761e3a7049a4095a363f17f33f8902cc2695ad810cc73800caaa  /opt/esp/idf/export.sh' | sha256sum --check
+          . /opt/esp/idf/export.sh
+          python3 -c "import runpy; runpy.run_path('scripts/source-atlas-wave063-inputs.py')['verify_environment']()"
           mkdir -p evidence
           curl --fail --retry 3 -L 'https://github.com/michaelrolphone-cmyk/RiscRTE-Wavshare-S3-Touch-AMOLED-2.06/releases/download/test-sd-apps-0.1.63/Waveshare-0.1.63-SD-Apps-Evidence.zip' -o evidence/release.zip
           python3 scripts/source-atlas-wave063-inputs.py --archive evidence/release.zip --source-set-version "$SOURCE_SET_VERSION" --output evidence
