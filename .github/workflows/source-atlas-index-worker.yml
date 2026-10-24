@@ -23,7 +23,7 @@ jobs:
     steps:
       - name: Drain Xylem jobs
         env:
-          ATLAS_URL: https://tasker-source-atlas.hazy-auk-4334.chatgpt.site
+          ATLAS_URL: https://tasker-source-atlas.cantikash.chatgpt.site
           INDEX_WORKER_TOKEN: ${{ secrets.SOURCE_ATLAS_INDEX_WORKER_TOKEN }}
           SITES_SERVICE_TOKEN: ${{ secrets.SOURCE_ATLAS_SERVICE_TOKEN }}
           ATLAS_TRIGGER: ${{ github.event_name }}
