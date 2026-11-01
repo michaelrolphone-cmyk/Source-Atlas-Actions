@@ -1,0 +1,26 @@
+name: Xylem runner receipt regressions
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/source-atlas-index-worker.yml'
+      - '.github/workflows/source-atlas-runner-tests.yml'
+      - 'tests/test_runner_*.mjs'
+  push:
+    paths:
+      - '.github/workflows/source-atlas-index-worker.yml'
+      - '.github/workflows/source-atlas-runner-tests.yml'
+      - 'tests/test_runner_*.mjs'
+permissions:
+  contents: read
+jobs:
+  receipts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test tests/test_runner_*.mjs

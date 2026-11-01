@@ -35,6 +35,17 @@ jobs:
           export async function runActions(env=process.env,{budget=45*60000,handoffBudget=4*60000,sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),emit=message=>console.info(JSON.stringify(message))}={}){
            const start=now();let cycles=0,next_retry_at=env.ATLAS_NOT_BEFORE||null,unfinished=true,continuationAttempted=false,continuation=null,requestSequence=0,lastFailure=null;
            const remember=value=>{const t=Date.parse(value);if(Number.isFinite(t)&&t>Math.max(now(),Date.parse(next_retry_at)||0))next_retry_at=new Date(t).toISOString();};
+           const validResult=(operation,data)=>!!data&&typeof data==='object'&&!Array.isArray(data)&&(!data.error||(operation==='continue'&&data.accepted===false&&(data.waiting===true||data.busy===true)))&&(operation==='process'?(data.idle===true||data.busy===true||data.waiting===true||typeof data.job?.state==='string'):operation==='heartbeat'?data.recorded===true:operation==='continue'?typeof data.accepted==='boolean'&&(data.accepted||data.idle===true||data.busy===true||data.waiting===true||typeof data.recovery_action==='string'):operation==='deliver_notifications'?Number.isInteger(data.pending):operation==='refresh_due'?(data.due===false||data.busy===true||data.waiting===true||Array.isArray(data.results)):false);
+           const recover=async failure=>{
+            if(!failure?.outcome_unknown||!/^\d{1,30}$/.test(env.GITHUB_RUN_ID||''))return null;
+            try{
+             const query=new URLSearchParams({run_id:env.GITHUB_RUN_ID,request_id:failure.request_id,operation:failure.operation});
+             const r=await fetch(env.ATLAS_URL+'/api/worker?'+query,{method:'GET',headers:{Authorization:'Bearer '+env.INDEX_WORKER_TOKEN,'OAI-Sites-Authorization':'Bearer '+env.SITES_SERVICE_TOKEN,'Connection':'close'},signal:AbortSignal.timeout(5000)});
+             if(!r.ok)return null;const result=await r.json(),receipt=result?.receipt;
+             if(result.found!==true||receipt?.version!==1||receipt.run_id!==env.GITHUB_RUN_ID||receipt.request_id!==failure.request_id||receipt.operation!==failure.operation||receipt.status!==200||!validResult(failure.operation,receipt.response))return null;
+             emit({...failure,outcome:'recovered',outcome_unknown:false,recovery_source:'durable-receipt'});remember(receipt.response.next_retry_at);remember(receipt.response.job?.next_retry_at);return receipt.response;
+            }catch{return null;}
+           };
            const callOnce=async body=>{
             lastFailure=null;let responseDetails={};
             const token=v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,120}$/.test(v)?v:null;
@@ -69,7 +80,8 @@ jobs:
             for(let attempt=0;;attempt++)try{return await callOnce(body);}catch(error){
              // Retry only a correlated server refusal proving that authorization failed
              // before execution. Lost/timeout/uncertain responses are never replayed.
-             if(!error.beforeExecution||attempt>=2||error.retryMs>30000||now()-start+error.retryMs>=budget)throw error;
+             if(!error.beforeExecution){const receipt=await recover(lastFailure);if(receipt)return receipt;throw error;}
+             if(attempt>=2||error.retryMs>30000||now()-start+error.retryMs>=budget)throw error;
              await sleep(error.retryMs);
             }
            };
