@@ -24,6 +24,14 @@ def source_path(path):
         if not a.map_copies or not path.is_file():return None
         matches=copies.get(hashlib.sha256(path.read_bytes()).hexdigest(),[])
         return matches[0] if len(matches)==1 else None
+def observed_location(cursor,path):
+    result={}
+    column=cursor.location.column
+    if column>0:result['column']=column
+    end=cursor.extent.end
+    if column>0 and end.column>0 and end.file and source_path(end.file.name)==path and end.line>=cursor.location.line and (end.line>cursor.location.line or end.column>=column):
+        result.update(end_line=end.line,end_column=end.column)
+    return result
 if a.engine=='clang':
     from clang import cindex
     if a.libclang:cindex.Config.set_library_file(a.libclang)
@@ -68,6 +76,17 @@ for unit in commands:
                     if t.kind in [cindex.TypeKind.POINTER,cindex.TypeKind.LVALUEREFERENCE,cindex.TypeKind.RVALUEREFERENCE]:t=t.get_pointee().get_canonical()
                     else:break
                 return t
+            def identity_scope(cursor):
+                if not cursor:return 'global'
+                if getattr(cursor.linkage,'name','')=='INTERNAL':return 'translation_unit'
+                parent=cursor.semantic_parent
+                for _ in range(30):
+                    if not parent or parent.kind==cindex.CursorKind.TRANSLATION_UNIT:break
+                    if getattr(parent.linkage,'name','')=='INTERNAL' or parent.kind==cindex.CursorKind.NAMESPACE and not parent.spelling:return 'translation_unit'
+                    parent=parent.semantic_parent
+                return 'global'
+            unit_path=source_path(file)
+            if unit_path is None:raise RuntimeError('Translation unit has no unique repository source identity')
             while stack:
                 c,caller,owner=stack.pop()
                 enclosing=c if c.kind in functions and c.is_definition() else caller
@@ -81,9 +100,10 @@ for unit in commands:
                 kind='definition' if c.is_definition() else 'declaration' if c.kind.is_declaration() else 'reference' if c.kind.is_reference() or c.kind in [cindex.CursorKind.DECL_REF_EXPR,cindex.CursorKind.MEMBER_REF_EXPR,cindex.CursorKind.CALL_EXPR] else None
                 if not kind:continue
                 referenced=c.referenced or c
-                entry=dict(symbol=referenced.spelling or c.spelling,usr=referenced.get_usr(),path=path,line=c.location.line,kind=kind)
+                entry=dict(symbol=referenced.spelling or c.spelling,usr=referenced.get_usr(),path=path,line=c.location.line,kind=kind,translation_unit=unit_path,identity_scope=identity_scope(referenced))
+                entry.update(observed_location(c,path))
                 if kind=='reference':
-                    entry.update(reference_kind='call' if c.kind==cindex.CursorKind.CALL_EXPR else 'other',caller=caller.spelling if caller else None,caller_usr=caller.get_usr() if caller else None)
+                    entry.update(reference_kind='call' if c.kind==cindex.CursorKind.CALL_EXPR else 'other',caller=caller.spelling if caller else None,caller_usr=caller.get_usr() if caller else None,caller_scope=identity_scope(caller))
                 target_kind=entity_kinds.get(referenced.kind.name)
                 if target_kind:
                     parent=c.semantic_parent if kind!='reference' else referenced.semantic_parent
@@ -91,7 +111,8 @@ for unit in commands:
                     call=c.kind==cindex.CursorKind.CALL_EXPR
                     actual_owner=caller if call and caller else owner
                     relation='invokes_callback' if call and referenced.kind in [cindex.CursorKind.FIELD_DECL,cindex.CursorKind.VAR_DECL] else 'calls' if call else 'inherits' if c.kind==cindex.CursorKind.CXX_BASE_SPECIFIER else 'uses_type' if c.kind in [cindex.CursorKind.TYPE_REF,cindex.CursorKind.TEMPLATE_REF] else 'initializer_reference' if owner and owner.kind==cindex.CursorKind.VAR_DECL and referenced.kind in functions else 'references'
-                    entry.update(entity_kind=target_kind,qualified_name=qualified(referenced),signature=referenced.type.spelling[:1000],semantic_parent_usr=parent.get_usr() if parent else '',semantic_parent_name=parent.spelling if parent else '',owner_usr=actual_owner.get_usr() if actual_owner else '',owner_symbol=actual_owner.spelling if actual_owner else '',type_usr=td.get_usr() if td and td.kind!=cindex.CursorKind.NO_DECL_FOUND else '',type_spelling=t.spelling[:1000],end_line=max(c.location.line,c.extent.end.line),callable=t.kind in [cindex.TypeKind.FUNCTIONPROTO,cindex.TypeKind.FUNCTIONNOPROTO],relation_kind=relation)
+                    entry.update(entity_kind=target_kind,qualified_name=qualified(referenced),signature=referenced.type.spelling[:1000],semantic_parent_usr=parent.get_usr() if parent else '',semantic_parent_name=parent.spelling if parent else '',owner_usr=actual_owner.get_usr() if actual_owner else '',owner_symbol=actual_owner.spelling if actual_owner else '',type_usr=td.get_usr() if td and td.kind!=cindex.CursorKind.NO_DECL_FOUND else '',type_spelling=t.spelling[:1000],callable=t.kind in [cindex.TypeKind.FUNCTIONPROTO,cindex.TypeKind.FUNCTIONNOPROTO],relation_kind=relation)
+                    entry.update(semantic_parent_scope=identity_scope(parent),owner_scope=identity_scope(actual_owner),type_scope=identity_scope(td))
                     if kind!='reference' and c.kind in [cindex.CursorKind.STRUCT_DECL,cindex.CursorKind.CLASS_DECL]:
                         entry['callback_contract']=any(child.kind==cindex.CursorKind.FIELD_DECL and peeled_type(child).kind in [cindex.TypeKind.FUNCTIONPROTO,cindex.TypeKind.FUNCTIONNOPROTO] for child in children)
                 local.append(entry)
@@ -122,11 +143,12 @@ coverage=dict(total_units=len(commands),indexed_units=indexed,failed_units=faile
 if a.map_copies:
     coverage['complete']=False
     coverage['failed_units'].append('Generated copies mapped by unique byte identity; generated-only sources and ambiguous copies are not covered by canonical Git source. No complete-reference claim.')
-base=dict(repository=a.repository,commit=sha,engine=a.engine,configuration_hash=config,build_configuration=pathlib.Path(a.compile_commands).name+(' target='+a.target if a.target else '')+'; parser diagnostics: -Wno-error',source_set_version=a.source_set_version,coverage=coverage,**({'architecture_schema':1} if a.engine=='clang' else {}))
+base=dict(repository=a.repository,commit=sha,engine=a.engine,configuration_hash=config,build_configuration=pathlib.Path(a.compile_commands).name+(' target='+a.target if a.target else '')+'; parser diagnostics: -Wno-error',source_set_version=a.source_set_version,coverage=coverage,**({'architecture_schema':2} if a.engine=='clang' else {}))
 pathlib.Path(a.output).write_text(json.dumps(dict(**base,entries=entries),indent=2))
 if a.upload:
     if not indexed:raise SystemExit('No translation units parsed successfully; refusing an empty compiler index. Inspect failed_units in output.')
-    index_id=str(uuid.uuid5(uuid.NAMESPACE_URL,a.repository+'@'+sha+':'+config+':'+str(a.source_set_version)+':architecture-v1'));batches=[entries[i:i+1000] for i in range(0,len(entries),1000)] or [[]]
+    identity_version='architecture-v2' if a.engine=='clang' else 'architecture-v1'
+    index_id=str(uuid.uuid5(uuid.NAMESPACE_URL,a.repository+'@'+sha+':'+config+':'+str(a.source_set_version)+':'+identity_version));batches=[entries[i:i+1000] for i in range(0,len(entries),1000)] or [[]]
     for i,batch in enumerate(batches):
         payload=dict(operation='submit_symbol_index',arguments=dict(**base,index_id=index_id,batch_id=str(i),final=i==len(batches)-1,entries=batch))
         req=urllib.request.Request(os.environ['ATLAS_URL'].rstrip('/')+'/api/worker',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['INDEX_WORKER_TOKEN'],'OAI-Sites-Authorization':'Bearer '+os.environ['SITES_SERVICE_TOKEN']})
