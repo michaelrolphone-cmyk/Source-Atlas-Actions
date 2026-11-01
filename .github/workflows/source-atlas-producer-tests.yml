@@ -1,0 +1,28 @@
+name: Source Atlas producer contracts
+on:
+  push:
+    paths:
+      - scripts/source-atlas-ci-symbols.py
+      - tests/test_compiler_contract.py
+      - .github/workflows/source-atlas-producer-tests.yml
+  pull_request:
+    paths:
+      - scripts/source-atlas-ci-symbols.py
+      - tests/test_compiler_contract.py
+      - .github/workflows/source-atlas-producer-tests.yml
+permissions:
+  contents: read
+jobs:
+  producer-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned host semantic parser
+        run: python -m pip install libclang==18.1.1
+      - name: Verify observed ranges and translation-unit identity
+        run: python tests/test_compiler_contract.py
