@@ -1,0 +1,10 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const workflow=readFileSync(new URL('../.github/workflows/source-atlas-index-worker.yml',import.meta.url),'utf8');
+const start=workflow.indexOf('          // Xylem managed runner.'),end=workflow.indexOf('          await runActions();',start);
+const source=workflow.slice(start,end).split('\n').map(l=>l.slice(10)).join('\n');
+const {runActions}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const env={ATLAS_URL:'https://fixture.invalid',ATLAS_TRIGGER:'schedule',GITHUB_RUN_ID:'123'};
+test('natural schedule uses independent concurrency, never index heartbeat/process loop',async()=>{assert.match(workflow,/github.event_name == 'schedule' && 'source-atlas-schedule-probe' \|\| 'source-atlas-index-worker'/);const calls=[];globalThis.fetch=async(url,o)=>{calls.push(JSON.parse(o.body));return Response.json({recorded:true,role:'watchdog',worker_alive:true});};const r=await runActions(env,{emit:()=>{}});assert.equal(r.role,'watchdog');assert.deepEqual(calls.map(c=>c.operation),['scheduled_probe']);assert.equal(calls[0].trigger,'scheduled')});
+for(const invalid of [false,true])test('lost probe response '+(invalid?'mismatched receipt fails':'recovers exact receipt')+' without POST replay',async()=>{let posts=0,gets=0,request;globalThis.fetch=async(url,o)=>{if(o.method==='GET'){gets++;return Response.json({found:true,receipt:{version:1,run_id:'123',request_id:invalid?'wrong':request.request_id,operation:'scheduled_probe',status:200,response:{recorded:true,role:'watchdog'}}});}posts++;request=JSON.parse(o.body);throw new TypeError('lost response');};if(invalid)await assert.rejects(runActions(env,{emit:()=>{}}));else assert.equal((await runActions(env,{emit:()=>{}})).recorded,true);assert.equal(posts,1);assert.equal(gets,1)});
