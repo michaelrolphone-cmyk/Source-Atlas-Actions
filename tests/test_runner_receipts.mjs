@@ -59,9 +59,9 @@ for(const options of [{getStatus:401},{getStatus:503},{getFailure:true}]) test('
  const r=await fixture(options);assert.ok(r.error);assert.equal(r.calls.filter(x=>x.method==='GET').length,1);assert.equal(r.calls.filter(x=>x.method==='POST'&&x.body.operation==='process').length,1);
 });
 test('invalid run identity prevents receipt lookup',async()=>{const r=await fixture({runId:'invalid'});assert.ok(r.error);assert.equal(r.calls.filter(x=>x.method==='GET').length,0);});
-test('workflow settings and scheduled indexing behavior preserved',()=>{
- for(const token of ['cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"','group: source-atlas-index-worker','cancel-in-progress: false','permissions: {}','timeout-minutes: 50','ATLAS_URL: https://tasker-source-atlas.cantikash.chatgpt.site','secrets.SOURCE_ATLAS_INDEX_WORKER_TOKEN','secrets.SOURCE_ATLAS_SERVICE_TOKEN'])assert.ok(workflow.includes(token),token);
- assert.ok(!source.includes('scheduled_probe'));assert.ok(!workflow.includes('source-atlas-schedule-probe'));assert.ok(!source.includes('configure_worker'));
+test('workflow settings and receipt recovery preserved in independent-watchdog successor',()=>{
+ for(const token of ['cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"','cancel-in-progress: false','permissions: {}','timeout-minutes: 50','ATLAS_URL: "https://tasker-source-atlas.cantikash.chatgpt.site"','secrets.SOURCE_ATLAS_INDEX_WORKER_TOKEN','secrets.SOURCE_ATLAS_SERVICE_TOKEN'])assert.ok(workflow.includes(token),token);
+ assert.ok(source.includes('scheduled_probe'));assert.ok(workflow.includes('source-atlas-schedule-probe'));assert.ok(!source.includes('configure_worker'));
 });
 for (const [name, response, success] of [
  ['accepted',{accepted:true},true],

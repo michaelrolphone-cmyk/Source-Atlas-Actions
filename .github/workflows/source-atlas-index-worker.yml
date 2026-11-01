@@ -14,7 +14,7 @@ on:
     - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
 permissions: {}
 concurrency:
-  group: source-atlas-index-worker
+  group: ${{ github.event_name == 'schedule' && 'source-atlas-schedule-probe' || 'source-atlas-index-worker' }}
   cancel-in-progress: false
 jobs:
   index:
@@ -23,7 +23,7 @@ jobs:
     steps:
       - name: Drain Xylem jobs
         env:
-          ATLAS_URL: https://tasker-source-atlas.cantikash.chatgpt.site
+          ATLAS_URL: "https://tasker-source-atlas.cantikash.chatgpt.site"
           INDEX_WORKER_TOKEN: ${{ secrets.SOURCE_ATLAS_INDEX_WORKER_TOKEN }}
           SITES_SERVICE_TOKEN: ${{ secrets.SOURCE_ATLAS_SERVICE_TOKEN }}
           ATLAS_TRIGGER: ${{ github.event_name }}
@@ -35,7 +35,7 @@ jobs:
           export async function runActions(env=process.env,{budget=45*60000,handoffBudget=4*60000,sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),emit=message=>console.info(JSON.stringify(message))}={}){
            const start=now();let cycles=0,next_retry_at=env.ATLAS_NOT_BEFORE||null,unfinished=true,continuationAttempted=false,continuation=null,requestSequence=0,lastFailure=null;
            const remember=value=>{const t=Date.parse(value);if(Number.isFinite(t)&&t>Math.max(now(),Date.parse(next_retry_at)||0))next_retry_at=new Date(t).toISOString();};
-           const validResult=(operation,data)=>!!data&&typeof data==='object'&&!Array.isArray(data)&&(!data.error||(operation==='continue'&&data.accepted===false&&(data.waiting===true||data.busy===true)))&&(operation==='process'?(data.idle===true||data.busy===true||data.waiting===true||typeof data.job?.state==='string'):operation==='heartbeat'?data.recorded===true:operation==='continue'?typeof data.accepted==='boolean'&&(data.accepted||data.idle===true||data.busy===true||data.waiting===true||typeof data.recovery_action==='string'):operation==='deliver_notifications'?Number.isInteger(data.pending):operation==='refresh_due'?(data.due===false||data.busy===true||data.waiting===true||Array.isArray(data.results)):false);
+           const validResult=(operation,data)=>!!data&&typeof data==='object'&&!Array.isArray(data)&&(!data.error||(operation==='continue'&&data.accepted===false&&(data.waiting===true||data.busy===true)))&&(operation==='process'?(data.idle===true||data.busy===true||data.waiting===true||typeof data.job?.state==='string'):operation==='heartbeat'||operation==='scheduled_probe'?data.recorded===true:operation==='continue'?typeof data.accepted==='boolean'&&(data.accepted||data.idle===true||data.busy===true||data.waiting===true||typeof data.recovery_action==='string'):operation==='deliver_notifications'?Number.isInteger(data.pending):operation==='refresh_due'?(data.due===false||data.busy===true||data.waiting===true||Array.isArray(data.results)):false);
            const recover=async failure=>{
             if(!failure?.outcome_unknown||!/^\d{1,30}$/.test(env.GITHUB_RUN_ID||''))return null;
             try{
@@ -69,7 +69,7 @@ jobs:
              throw Object.assign(Error('Xylem '+body.operation+' callback HTTP '+r.status+' failed ('+(token(data?.code)||'invalid response')+'); '+(beforeExecution?'operation not started':'outcome unknown')+'; request_id='+request_id+' elapsed_ms='+(now()-began)),{beforeExecution,retryMs:Math.max(1000,Number(data?.retry_after_seconds||1)*1000)});
             }
             const valid=body.operation==='process'?(data.idle===true||data.busy===true||data.waiting===true||typeof data.job?.state==='string'):
-             body.operation==='heartbeat'?data.recorded===true:
+             (body.operation==='heartbeat'||body.operation==='scheduled_probe')?data.recorded===true:
              body.operation==='continue'?typeof data.accepted==='boolean'&&(data.accepted||data.idle===true||data.busy===true||data.waiting===true||typeof data.recovery_action==='string'):
              body.operation==='deliver_notifications'?Number.isInteger(data.pending):
              body.operation==='refresh_due'?(data.due===false||data.busy===true||data.waiting===true||Array.isArray(data.results)):false;
@@ -97,6 +97,7 @@ jobs:
             do{await heartbeat('waiting',{cycles,continuation:result});await sleep(Math.min(30000,Math.max(1,retryAt-now())));}while(now()<retryAt);
             if(now()>=deadline)return {...result,recovery_action:'watchdog_retry_after_deadline'};
            }};
+           if(env.ATLAS_TRIGGER==='schedule'){return call({operation:'scheduled_probe',run_id,trigger:'scheduled',provider:'github_actions'});}
            try{await heartbeat('started');let refreshed=false;do{
             if(next_retry_at){const wait=Math.max(0,Date.parse(next_retry_at)-now());if(wait>0){if(now()-start+Math.min(wait,30000)>=budget)break;await sleep(Math.min(wait,30000));await heartbeat('waiting',{cycles});continue;}next_retry_at=null;}
             const r=await call({operation:'process'});cycles++;
