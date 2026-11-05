@@ -1,0 +1,118 @@
+test_archive_tampering (test_wave063_inputs.Inputs.test_archive_tampering) ... ok
+test_bad_probe_rejected (test_wave063_inputs.Inputs.test_bad_probe_rejected) ... ok
+test_duplicate_unit (test_wave063_inputs.Inputs.test_duplicate_unit) ... ok
+test_environment_receipt_is_allowlisted (test_wave063_inputs.Inputs.test_environment_receipt_is_allowlisted) ... ERROR
+test_missing_environment (test_wave063_inputs.Inputs.test_missing_environment) ... 
+  test_missing_environment (test_wave063_inputs.Inputs.test_missing_environment) (key='IDF_PATH') ... ERROR
+  test_missing_environment (test_wave063_inputs.Inputs.test_missing_environment) (key='IDF_PYTHON_ENV_PATH') ... ERROR
+  test_missing_environment (test_wave063_inputs.Inputs.test_missing_environment) (key='ESP_IDF_VERSION') ... ERROR
+test_missing_or_changed_input (test_wave063_inputs.Inputs.test_missing_or_changed_input) ... ok
+test_missing_unit (test_wave063_inputs.Inputs.test_missing_unit) ... ok
+test_no_build_command_execution (test_wave063_inputs.Inputs.test_no_build_command_execution) ... ERROR
+test_parser_preserves_actual_arguments (test_wave063_inputs.Inputs.test_parser_preserves_actual_arguments) ... ok
+test_pinned_environment (test_wave063_inputs.Inputs.test_pinned_environment) ... ERROR
+test_reconfigure_does_not_launch_without_environment (test_wave063_inputs.Inputs.test_reconfigure_does_not_launch_without_environment) ... ERROR
+test_select_actual_inventory (test_wave063_inputs.Inputs.test_select_actual_inventory) ... ok
+test_wrong_compiler_family (test_wave063_inputs.Inputs.test_wrong_compiler_family) ... ok
+test_wrong_cpu_wrapper (test_wave063_inputs.Inputs.test_wrong_cpu_wrapper) ... ok
+test_wrong_dispatch_identity (test_wave063_inputs.Inputs.test_wrong_dispatch_identity) ... ok
+test_wrong_environment (test_wave063_inputs.Inputs.test_wrong_environment) ... 
+  test_wrong_environment (test_wave063_inputs.Inputs.test_wrong_environment) (key='IDF_PATH') ... ERROR
+  test_wrong_environment (test_wave063_inputs.Inputs.test_wrong_environment) (key='IDF_PYTHON_ENV_PATH') ... ERROR
+  test_wrong_environment (test_wave063_inputs.Inputs.test_wrong_environment) (key='ESP_IDF_VERSION') ... ERROR
+test_wrong_working_directory (test_wave063_inputs.Inputs.test_wrong_working_directory) ... ok
+
+======================================================================
+ERROR: test_environment_receipt_is_allowlisted (test_wave063_inputs.Inputs.test_environment_receipt_is_allowlisted)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/shared/xylem-wave063-compiler/tests/test_wave063_inputs.py", line 50, in test_environment_receipt_is_allowlisted
+    self.assertEqual(self.environment(), m.verify_environment(env))
+                                         ^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'inputs' has no attribute 'verify_environment'
+
+======================================================================
+ERROR: test_missing_environment (test_wave063_inputs.Inputs.test_missing_environment) (key='IDF_PATH')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/shared/xylem-wave063-compiler/tests/test_wave063_inputs.py", line 39, in test_missing_environment
+    m.verify_environment(env)
+    ^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'inputs' has no attribute 'verify_environment'
+
+======================================================================
+ERROR: test_missing_environment (test_wave063_inputs.Inputs.test_missing_environment) (key='IDF_PYTHON_ENV_PATH')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/shared/xylem-wave063-compiler/tests/test_wave063_inputs.py", line 39, in test_missing_environment
+    m.verify_environment(env)
+    ^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'inputs' has no attribute 'verify_environment'
+
+======================================================================
+ERROR: test_missing_environment (test_wave063_inputs.Inputs.test_missing_environment) (key='ESP_IDF_VERSION')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/shared/xylem-wave063-compiler/tests/test_wave063_inputs.py", line 39, in test_missing_environment
+    m.verify_environment(env)
+    ^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'inputs' has no attribute 'verify_environment'
+
+======================================================================
+ERROR: test_no_build_command_execution (test_wave063_inputs.Inputs.test_no_build_command_execution)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/shared/xylem-wave063-compiler/tests/test_wave063_inputs.py", line 121, in test_no_build_command_execution
+    with tempfile.TemporaryDirectory() as d, patch.object(m.subprocess, 'run') as run, patch.dict(m.os.environ, self.environment(), clear=True):
+                                                                                                  ^^^^
+AttributeError: module 'inputs' has no attribute 'os'
+
+======================================================================
+ERROR: test_pinned_environment (test_wave063_inputs.Inputs.test_pinned_environment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/shared/xylem-wave063-compiler/tests/test_wave063_inputs.py", line 32, in test_pinned_environment
+    self.assertEqual(self.environment(), m.verify_environment(self.environment()))
+                                         ^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'inputs' has no attribute 'verify_environment'
+
+======================================================================
+ERROR: test_reconfigure_does_not_launch_without_environment (test_wave063_inputs.Inputs.test_reconfigure_does_not_launch_without_environment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/shared/xylem-wave063-compiler/tests/test_wave063_inputs.py", line 54, in test_reconfigure_does_not_launch_without_environment
+    with patch.dict(m.os.environ, {}, clear=True), patch.object(m.subprocess, 'run') as run:
+                    ^^^^
+AttributeError: module 'inputs' has no attribute 'os'
+
+======================================================================
+ERROR: test_wrong_environment (test_wave063_inputs.Inputs.test_wrong_environment) (key='IDF_PATH')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/shared/xylem-wave063-compiler/tests/test_wave063_inputs.py", line 46, in test_wrong_environment
+    m.verify_environment(env)
+    ^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'inputs' has no attribute 'verify_environment'
+
+======================================================================
+ERROR: test_wrong_environment (test_wave063_inputs.Inputs.test_wrong_environment) (key='IDF_PYTHON_ENV_PATH')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/shared/xylem-wave063-compiler/tests/test_wave063_inputs.py", line 46, in test_wrong_environment
+    m.verify_environment(env)
+    ^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'inputs' has no attribute 'verify_environment'
+
+======================================================================
+ERROR: test_wrong_environment (test_wave063_inputs.Inputs.test_wrong_environment) (key='ESP_IDF_VERSION')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/shared/xylem-wave063-compiler/tests/test_wave063_inputs.py", line 46, in test_wrong_environment
+    m.verify_environment(env)
+    ^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'inputs' has no attribute 'verify_environment'
+
+----------------------------------------------------------------------
+Ran 17 tests in 0.132s
+
+FAILED (errors=10)

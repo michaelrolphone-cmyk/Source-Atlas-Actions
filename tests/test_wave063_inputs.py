@@ -23,6 +23,40 @@ def fixture():
 
 
 class Inputs(unittest.TestCase):
+    def environment(self):
+        return {'IDF_PATH': '/opt/esp/idf',
+                'IDF_PYTHON_ENV_PATH': '/opt/esp/python_env/idf6.1_py3.12_env',
+                'ESP_IDF_VERSION': '6.1'}
+
+    def test_pinned_environment(self):
+        self.assertEqual(self.environment(), m.verify_environment(self.environment()))
+
+    def test_missing_environment(self):
+        for key in self.environment():
+            with self.subTest(key=key):
+                env = self.environment(); del env[key]
+                with self.assertRaisesRegex(ValueError, key):
+                    m.verify_environment(env)
+
+    def test_wrong_environment(self):
+        for key in self.environment():
+            with self.subTest(key=key):
+                env = self.environment(); env[key] = 'unexpected'
+                with self.assertRaisesRegex(ValueError, key):
+                    m.verify_environment(env)
+
+    def test_environment_receipt_is_allowlisted(self):
+        env = self.environment(); env['UNRELATED_PRIVATE_VALUE'] = 'not-for-receipt'
+        self.assertEqual(self.environment(), m.verify_environment(env))
+
+    def test_reconfigure_does_not_launch_without_environment(self):
+        q = {'controlled_build': {'commands': [[]]}}
+        with patch.dict(m.os.environ, {}, clear=True), patch.object(m.subprocess, 'run') as run:
+            with tempfile.TemporaryDirectory() as d:
+                with self.assertRaisesRegex(ValueError, 'IDF_PATH'):
+                    m.reconfigure(q, b'x', pathlib.Path(d))
+            run.assert_not_called()
+
     def test_select_actual_inventory(self):
         self.assertEqual(68, len(m.select_runtime(json.dumps(fixture()))))
 
@@ -84,7 +118,7 @@ class Inputs(unittest.TestCase):
 
     def test_no_build_command_execution(self):
         q = {'controlled_build': {'commands': [['cmake', '--build', '/tmp']]}}
-        with tempfile.TemporaryDirectory() as d, patch.object(m.subprocess, 'run') as run:
+        with tempfile.TemporaryDirectory() as d, patch.object(m.subprocess, 'run') as run, patch.dict(m.os.environ, self.environment(), clear=True):
             with self.assertRaisesRegex(ValueError, 'configuration command'):
                 m.reconfigure(q, b'x', pathlib.Path(d))
             run.assert_not_called()
